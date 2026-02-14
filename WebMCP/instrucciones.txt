@@ -1,0 +1,34 @@
+
+• Investigado y implementado.
+
+  Estado del estandar (verificado en fuentes primarias):
+
+  - WebMCP esta en incubacion en el repo oficial: https://github.com/webmachinelearning/webmcp
+  - W3C WebML CG anuncio su aceptacion como nuevo deliverable el 30 de septiembre de 2025: https://lists.w3.org/Archives/Public/public-webmachinelearning/2025Sep/0028.html
+
+  Web de ejemplo creada en tu repo:
+
+  - index.html
+  - styles.css
+  - app.js
+  - README.md
+
+  Que implementa:
+
+  - Deteccion de navigator.modelContext
+  - Registro de herramientas MCP para agentes:
+      - add_task
+      - list_tasks
+      - complete_task
+  - Soporte para ambos estilos de API:
+      - modelContext.registerTool(...)
+      - modelContext.provideContext({ tools })
+  - Fallback claro si el navegador aun no soporta WebMCP
+  - UI local (lista de tareas + log de invocaciones)
+
+  Como correrlo:
+
+  - npx serve . (o python -m http.server 8080)
+  - Abrir http://localhost:3000 (o el puerto que te de el servidor)
+
+  Si quieres, en el siguiente paso te lo adapto a un caso real (por ejemplo: CRM, tickets o inventario) con tools MCP mas cercanas a tu negocio.

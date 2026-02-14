@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebMCP Demo - Declarativa HTML</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header class="hero">
+        <p class="kicker">Demo WebMCP Declarativa</p>
+        <h1>Tools por atributos HTML</h1>
+        <p class="badge warn">Experimental (Chrome Canary)</p>
+      </header>
+
+      <section class="card">
+        <p class="hint">
+          Esta pagina usa solo atributos HTML para declarar tools:
+          <code>toolname</code>, <code>tooldescription</code>,
+          <code>toolpropdescription</code> y <code>toolautosubmit</code>.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>add_task</h2>
+        <form
+          id="add-form"
+          action="#"
+          method="get"
+          toolname="add_task"
+          tooldescription="Agrega una tarea nueva al listado."
+          toolautosubmit
+        >
+          <label for="add-title">Titulo</label>
+          <div class="row">
+            <input
+              id="add-title"
+              name="title"
+              type="text"
+              required
+              maxlength="120"
+              placeholder="Ej. Enviar reporte"
+              toolpropdescription="Texto de la nueva tarea"
+            />
+            <button type="submit">Enviar add_task</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>list_tasks</h2>
+        <form
+          id="list-form"
+          action="#"
+          method="get"
+          toolname="list_tasks"
+          tooldescription="Recupera el listado actual de tareas."
+          toolautosubmit
+        >
+          <button type="submit">Enviar list_tasks</button>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>complete_task</h2>
+        <form
+          id="complete-form"
+          action="#"
+          method="get"
+          toolname="complete_task"
+          tooldescription="Marca una tarea como completada por id."
+          toolautosubmit
+        >
+          <label for="complete-id">ID de tarea</label>
+          <div class="row">
+            <input
+              id="complete-id"
+              name="id"
+              type="number"
+              min="1"
+              step="1"
+              required
+              placeholder="Ej. 3"
+              toolpropdescription="ID numerico de la tarea"
+            />
+            <button type="submit">Enviar complete_task</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Tareas Abiertas</h2>
+        <ul id="open-task-list" class="task-list"></ul>
+      </section>
+
+      <section class="card">
+        <h2>Resultado</h2>
+        <p class="hint">Respuesta local de cada tool en JSON.</p>
+        <pre id="tool-log" class="log"></pre>
+      </section>
+
+      <section class="card">
+        <a href="./index.html">Volver a la demo JS (toolkit con JavaScript)</a>
+      </section>
+    </main>
+
+    <script>
+      const storageKey = "webmcp_declarative_tasks";
+      const addForm = document.getElementById("add-form");
+      const listForm = document.getElementById("list-form");
+      const completeForm = document.getElementById("complete-form");
+      const openTaskList = document.getElementById("open-task-list");
+      const logEl = document.getElementById("tool-log");
+
+      function readTasks() {
+        try {
+          const raw = localStorage.getItem(storageKey);
+          const parsed = raw ? JSON.parse(raw) : [];
+          return Array.isArray(parsed) ? parsed : [];
+        } catch {
+          return [];
+        }
+      }
+
+      function writeTasks(tasks) {
+        localStorage.setItem(storageKey, JSON.stringify(tasks));
+      }
+
+      function nextId(tasks) {
+        return tasks.reduce((max, task) => Math.max(max, Number(task.id) || 0), 0) + 1;
+      }
+
+      function renderOpenTasks(tasks) {
+        const openTasks = tasks.filter((task) => !task.done);
+        openTaskList.innerHTML = "";
+        if (openTasks.length === 0) {
+          const empty = document.createElement("li");
+          empty.textContent = "No hay tareas abiertas.";
+          openTaskList.appendChild(empty);
+          return;
+        }
+
+        for (const task of openTasks) {
+          const li = document.createElement("li");
+          li.className = "task-item";
+          li.textContent = `#${task.id} ${task.title}`;
+          openTaskList.appendChild(li);
+        }
+      }
+
+      function writeResult(tool, payload) {
+        logEl.textContent = JSON.stringify({ tool, payload }, null, 2);
+      }
+
+      function replyToAgent(event, payload) {
+        if (typeof event.respondWith === "function") {
+          event.respondWith(Promise.resolve(JSON.stringify(payload)));
+        }
+      }
+
+      function addTask(title) {
+        const value = String(title || "").trim();
+        if (!value) {
+          throw new Error("title es obligatorio");
+        }
+        const tasks = readTasks();
+        const created = { id: nextId(tasks), title: value, done: false };
+        tasks.push(created);
+        writeTasks(tasks);
+        return created;
+      }
+
+      function listTasks() {
+        return readTasks();
+      }
+
+      function completeTask(id) {
+        const targetId = Number(id);
+        const tasks = readTasks();
+        const task = tasks.find((item) => Number(item.id) === targetId);
+        if (!task) {
+          throw new Error(`No existe la tarea ${id}`);
+        }
+        task.done = true;
+        writeTasks(tasks);
+        return task;
+      }
+
+      addForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        try {
+          const title = new FormData(addForm).get("title");
+          const created = addTask(title);
+          const tasks = listTasks();
+          const response = { ok: true, task: created, openTasks: tasks.filter((t) => !t.done) };
+          renderOpenTasks(tasks);
+          writeResult("add_task", response);
+          replyToAgent(event, response);
+          addForm.reset();
+        } catch (error) {
+          const response = { ok: false, error: error.message };
+          writeResult("add_task", response);
+          replyToAgent(event, response);
+        }
+      });
+
+      listForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const tasks = listTasks();
+        const openTasks = tasks.filter((task) => !task.done);
+        const response = { ok: true, tasks, openTasks };
+        renderOpenTasks(tasks);
+        writeResult("list_tasks", response);
+        replyToAgent(event, response);
+      });
+
+      completeForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        try {
+          const id = new FormData(completeForm).get("id");
+          const completed = completeTask(id);
+          const tasks = listTasks();
+          const response = {
+            ok: true,
+            task: completed,
+            openTasks: tasks.filter((task) => !task.done)
+          };
+          renderOpenTasks(tasks);
+          writeResult("complete_task", response);
+          replyToAgent(event, response);
+          completeForm.reset();
+        } catch (error) {
+          const response = { ok: false, error: error.message };
+          writeResult("complete_task", response);
+          replyToAgent(event, response);
+        }
+      });
+
+      const initial = listTasks();
+      renderOpenTasks(initial);
+      writeResult("init", { ok: true, tasks: initial });
+    </script>
+  </body>
+</html>

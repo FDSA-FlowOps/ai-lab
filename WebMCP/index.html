@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebMCP Demo - Lista de Tareas</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header class="hero">
+        <p class="kicker">Demo WebMCP</p>
+        <h1>Lista de tareas con herramientas para agentes</h1>
+        <p id="support-badge" class="badge">Comprobando soporte...</p>
+      </header>
+
+      <section class="card">
+        <h2>Tareas</h2>
+        <form id="task-form" class="task-form">
+          <label for="task-input">Nueva tarea</label>
+          <div class="row">
+            <input
+              id="task-input"
+              name="task"
+              type="text"
+              required
+              maxlength="120"
+              placeholder="Ej. Preparar informe semanal"
+            />
+            <button type="submit">Agregar</button>
+          </div>
+        </form>
+        <ul id="task-list" class="task-list" aria-live="polite"></ul>
+      </section>
+
+      <section class="card">
+        <h2>Log</h2>
+        <p class="hint">
+          Cuando un agente invoque herramientas via WebMCP, veras actividad aqui.
+        </p>
+        <pre id="log" class="log"></pre>
+      </section>
+
+      <section class="card">
+        <h2>Variante declarativa</h2>
+        <p class="hint">
+          Si quieres probar la version basada en atributos HTML, abre la pagina
+          declarativa.
+        </p>
+        <a href="./declarative.html">Ir a declarative.html</a>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
