@@ -1,0 +1,52 @@
+namespace Exp01EmbeddingsOllama.Data;
+
+public static class Samples
+{
+    public static readonly IReadOnlyList<string> All = new List<string>
+    {
+        "Necesito reservar una habitacion para dos personas este fin de semana.",
+        "Quiero apartar un cuarto doble para el sabado y domingo.",
+        "La app movil falla cuando intento iniciar sesion con Google.",
+        "No puedo loguearme con mi cuenta de Google en la aplicacion.",
+        "El servicio de pagos demora mas de cinco segundos en responder.",
+        "La API de cobros esta respondiendo muy lento.",
+        "Busco un hotel cerca del centro con desayuno incluido.",
+        "Quiero alojamiento centrico que incluya desayuno.",
+        "El vuelo se atraso por tormenta y perdi la conexion.",
+        "Perdi la conexion porque el primer vuelo salio con retraso.",
+        "Necesito cambiar mi contrasena porque olvide la anterior.",
+        "Olvide mi password y quiero restablecerla.",
+        "La factura tiene un cargo duplicado en la tarjeta.",
+        "Me cobraron dos veces la misma reserva.",
+        "El reporte mensual muestra menos ventas que en el dashboard.",
+        "Hay diferencia entre ventas del reporte y del panel principal.",
+        "Quiero cancelar la suscripcion antes de la renovacion.",
+        "Necesito dar de baja el plan antes de que se renueve.",
+        "El chatbot no entiende preguntas en espanol.",
+        "El asistente virtual responde mal cuando escribo en espanol.",
+        "Busco restaurantes veganos cerca del hotel.",
+        "Que opciones veganas hay cerca de mi alojamiento.",
+        "La impresora de la oficina no detecta el papel.",
+        "La bandeja marca sin papel aunque esta llena.",
+        "Necesito soporte para integrar webhooks en mi sistema.",
+        "Como conecto webhooks de eventos a mi plataforma.",
+        "El build de CI falla por tests intermitentes.",
+        "La pipeline se rompe por pruebas flaky.",
+        "Quiero exportar los datos a CSV con separador punto y coma.",
+        "Necesito descargar la informacion en formato CSV.",
+        "La bateria del portatil dura menos de dos horas.",
+        "El laptop se descarga demasiado rapido.",
+        "Busco una politica de reembolso para compras online.",
+        "Cual es la politica para devolver compras por internet.",
+        "Necesito una alerta cuando el CPU supere 80 por ciento.",
+        "Configurar notificacion al pasar 80 por ciento de uso de CPU.",
+        "Como preparo cafe cold brew en casa sin cafetera especial.",
+        "Receta rapida de pasta con tomate, ajo y albahaca.",
+        "Pronostico del tiempo para manana en Barcelona.",
+        "Necesito una rutina de estiramientos de 10 minutos por la manana.",
+        "Que pelicula de ciencia ficcion recomiendas para ver hoy.",
+        "Como limpiar manchas de tinta en una camisa blanca.",
+        "Estoy comparando bicicletas urbanas para moverme por la ciudad.",
+        "Quiero aprender acordes basicos de guitarra para principiantes."
+    };
+}
