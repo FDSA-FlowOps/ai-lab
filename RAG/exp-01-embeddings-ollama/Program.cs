@@ -7,6 +7,7 @@ using Exp01EmbeddingsOllama.Ollama;
 try
 {
     var appConfig = AppConfig.Load();
+    var sampleCache = new SampleEmbeddingsCache();
     using var cts = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) =>
     {
@@ -21,10 +22,10 @@ try
     var cli = CliCommand.Parse(args);
     if (cli is not null)
     {
-        return await ExecuteCommandAsync(cli, client, appConfig, cts.Token);
+        return await ExecuteCommandAsync(cli, client, appConfig, sampleCache, cts.Token);
     }
 
-    return await RunInteractiveAsync(client, appConfig, cts.Token);
+    return await RunInteractiveAsync(client, appConfig, sampleCache, cts.Token);
 }
 catch (OperationCanceledException)
 {
@@ -46,6 +47,7 @@ static async Task<int> ExecuteCommandAsync(
     CliCommand cli,
     OllamaEmbeddingClient client,
     AppConfig config,
+    SampleEmbeddingsCache sampleCache,
     CancellationToken cancellationToken)
 {
     switch (cli.Command)
@@ -53,9 +55,9 @@ static async Task<int> ExecuteCommandAsync(
         case "embed":
             return await RunEmbedAsync(client, config.OllamaModel, cli.Text!, cancellationToken);
         case "similar":
-            return await RunSimilarAsync(client, config, cli.Text!, cli.ThresholdOnly, cancellationToken);
+            return await RunSimilarAsync(client, config, sampleCache, cli.Text!, cli.ThresholdOnly, cancellationToken);
         case "duplicates":
-            return await RunDuplicatesAsync(client, config, cancellationToken);
+            return await RunDuplicatesAsync(client, config, sampleCache, cancellationToken);
         default:
             PrintUsage();
             return 1;
@@ -65,6 +67,7 @@ static async Task<int> ExecuteCommandAsync(
 static async Task<int> RunInteractiveAsync(
     OllamaEmbeddingClient client,
     AppConfig config,
+    SampleEmbeddingsCache sampleCache,
     CancellationToken cancellationToken)
 {
     PrintInteractiveHeader(config);
@@ -106,7 +109,7 @@ static async Task<int> RunInteractiveAsync(
 
         try
         {
-            _ = await ExecuteCommandAsync(command, client, config, cancellationToken);
+            _ = await ExecuteCommandAsync(command, client, config, sampleCache, cancellationToken);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
         {
@@ -142,6 +145,7 @@ static async Task<int> RunEmbedAsync(
 static async Task<int> RunSimilarAsync(
     OllamaEmbeddingClient client,
     AppConfig config,
+    SampleEmbeddingsCache sampleCache,
     string query,
     bool thresholdOnly,
     CancellationToken cancellationToken)
@@ -155,14 +159,7 @@ static async Task<int> RunSimilarAsync(
     Console.WriteLine($"[INFO] Generando embedding para query con modelo '{config.OllamaModel}'...");
     var queryEmbedding = Cosine.Normalize(await client.GetEmbeddingAsync(config.OllamaModel, query, cancellationToken));
 
-    var sampleEmbeddings = new List<(string Text, float[] Embedding)>(Samples.All.Count);
-    for (var i = 0; i < Samples.All.Count; i++)
-    {
-        var sample = Samples.All[i];
-        Console.WriteLine($"[INFO] Embedding sample {i + 1}/{Samples.All.Count}");
-        var emb = await client.GetEmbeddingAsync(config.OllamaModel, sample, cancellationToken);
-        sampleEmbeddings.Add((sample, Cosine.Normalize(emb)));
-    }
+    var sampleEmbeddings = await sampleCache.GetOrCreateAsync(client, config.OllamaModel, cancellationToken);
 
     var ranked = sampleEmbeddings
         .Select(x => new
@@ -202,17 +199,10 @@ static async Task<int> RunSimilarAsync(
 static async Task<int> RunDuplicatesAsync(
     OllamaEmbeddingClient client,
     AppConfig config,
+    SampleEmbeddingsCache sampleCache,
     CancellationToken cancellationToken)
 {
-    Console.WriteLine($"[INFO] Calculando embeddings para {Samples.All.Count} frases...");
-    var normalized = new List<(int Index, string Text, float[] Embedding)>(Samples.All.Count);
-    for (var i = 0; i < Samples.All.Count; i++)
-    {
-        var text = Samples.All[i];
-        Console.WriteLine($"[INFO] Embedding sample {i + 1}/{Samples.All.Count}");
-        var emb = await client.GetEmbeddingAsync(config.OllamaModel, text, cancellationToken);
-        normalized.Add((i, text, Cosine.Normalize(emb)));
-    }
+    var normalized = await sampleCache.GetOrCreateAsync(client, config.OllamaModel, cancellationToken);
 
     var duplicates = new List<(int Left, int Right, double Score)>();
     for (var i = 0; i < normalized.Count; i++)
@@ -410,5 +400,41 @@ sealed class AppConfig
         public double? DupThreshold { get; init; }
         public int? TopK { get; init; }
         public int? HttpTimeoutSeconds { get; init; }
+    }
+}
+
+sealed class SampleEmbeddingsCache
+{
+    private string? _model;
+    private List<(string Text, float[] Embedding)>? _cache;
+
+    public async Task<List<(string Text, float[] Embedding)>> GetOrCreateAsync(
+        OllamaEmbeddingClient client,
+        string model,
+        CancellationToken cancellationToken)
+    {
+        if (_cache is not null && string.Equals(_model, model, StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("[INFO] Reutilizando cache en memoria de embeddings de samples.");
+            return _cache;
+        }
+
+        Console.WriteLine($"[INFO] Generando embeddings batch para {Samples.All.Count} samples...");
+        var allEmbeddings = await client.GetEmbeddingsAsync(model, Samples.All, cancellationToken);
+        if (allEmbeddings.Length != Samples.All.Count)
+        {
+            throw new InvalidOperationException(
+                $"Cantidad inesperada de embeddings: {allEmbeddings.Length} (esperado {Samples.All.Count}).");
+        }
+
+        var normalized = new List<(string Text, float[] Embedding)>(Samples.All.Count);
+        for (var i = 0; i < Samples.All.Count; i++)
+        {
+            normalized.Add((Samples.All[i], Cosine.Normalize(allEmbeddings[i])));
+        }
+
+        _model = model;
+        _cache = normalized;
+        return normalized;
     }
 }

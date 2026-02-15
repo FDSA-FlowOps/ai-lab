@@ -2,7 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 
-namespace Exp01EmbeddingsOllama.Ollama;
+namespace Exp02VectorDbQdrant.Ollama;
 
 public sealed class OllamaEmbeddingClient : IDisposable
 {
@@ -36,29 +36,40 @@ public sealed class OllamaEmbeddingClient : IDisposable
             throw new ArgumentException("Debes enviar al menos un texto para embeddings.", nameof(inputs));
         }
 
-        var request = new EmbedRequest(model, inputs.ToArray());
+        for (var i = 0; i < inputs.Count; i++)
+        {
+            if (string.IsNullOrWhiteSpace(inputs[i]))
+            {
+                throw new ArgumentException("Los textos no pueden estar vacios.", nameof(inputs));
+            }
+        }
+
         HttpResponseMessage response;
         try
         {
-            response = await _httpClient.PostAsJsonAsync("/api/embed", request, cancellationToken);
+            response = await _httpClient.PostAsJsonAsync(
+                "/api/embed",
+                new EmbedRequest(model, inputs.ToArray()),
+                cancellationToken);
         }
         catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
         {
             throw new InvalidOperationException(
-                $"Timeout al llamar a Ollama. Revisa HTTP_TIMEOUT_SECONDS o disponibilidad en '{_httpClient.BaseAddress}'.", ex);
+                $"Timeout al llamar Ollama en '{_httpClient.BaseAddress}'.", ex);
         }
         catch (HttpRequestException ex)
         {
             throw new InvalidOperationException(
-                $"No se pudo conectar a Ollama en '{_httpClient.BaseAddress}'. Asegura que este corriendo.", ex);
+                $"No se pudo conectar a Ollama en '{_httpClient.BaseAddress}'. " +
+                "Asegura que este levantado.", ex);
         }
 
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
-            var body404 = await response.Content.ReadAsStringAsync(cancellationToken);
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
             throw new InvalidOperationException(
-                "Ollama devolvio 404. Revisa endpoint '/api/embed' o modelo instalado. " +
-                $"Detalle: {TrimBody(body404)}");
+                "Ollama respondio 404. Revisa endpoint '/api/embed' o modelo instalado. " +
+                $"Detalle: {TrimBody(body)}");
         }
 
         if (!response.IsSuccessStatusCode)

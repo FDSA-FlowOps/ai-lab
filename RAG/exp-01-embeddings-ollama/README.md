@@ -2,6 +2,11 @@
 
 Experimento independiente para generar embeddings con Ollama local, calcular cosine similarity en local y detectar duplicados semanticos.
 
+Notas de implementacion:
+- Usa endpoint moderno de Ollama: `POST /api/embed`.
+- `similar` y `duplicates` usan embeddings batch para `Samples`.
+- En modo interactivo se cachean embeddings de `Samples` en memoria para reutilizar en queries siguientes.
+
 ## Requisitos
 
 - .NET 10 SDK
