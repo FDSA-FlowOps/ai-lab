@@ -56,7 +56,9 @@ public sealed class IngestionService
             throw new InvalidOperationException("Cantidad inesperada de embeddings en primer batch.");
         }
 
-        await _qdrant.EnsureCollectionAsync(_config.QdrantCollection, firstVectors[0].Length, cancellationToken);
+        // Recreate collection on each ingest to avoid stale points when chunk count shrinks.
+        await _qdrant.DeleteCollectionIfExistsAsync(_config.QdrantCollection, cancellationToken);
+        await _qdrant.CreateCollectionAsync(_config.QdrantCollection, firstVectors[0].Length, cancellationToken);
 
         var points = new List<QdrantPoint>(chunks.Count);
         for (var i = 0; i < firstBatchCount; i++)

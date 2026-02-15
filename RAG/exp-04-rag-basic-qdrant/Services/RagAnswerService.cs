@@ -69,8 +69,14 @@ public sealed class RagAnswerService
             _config.ChatNumCtx,
             cancellationToken);
         var citations = ExtractCitations(answer);
+        var allowedCitations = BuildAllowedCitationsSet(contextForPrompt);
+        var validCitations = citations
+            .Where(c => allowedCitations.Contains(c))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-        if (citations.Count == 0)
+        // Reject answers with no valid citations, or with fabricated citations not present in retrieved context.
+        if (validCitations.Count == 0 || validCitations.Count != citations.Count)
         {
             return new RagAnswerResult
             {
@@ -88,7 +94,7 @@ public sealed class RagAnswerService
             UsedLlm = true,
             Answer = answer,
             Retrieved = retrieved,
-            Citations = citations,
+            Citations = validCitations,
             Top1Score = top1,
             GapTop1Top2 = gap,
             IsAmbiguous = isAmbiguous
@@ -169,5 +175,12 @@ Usa un tono claro y breve.
     {
         var clean = text.Trim();
         return clean.Length <= max ? clean : clean[..max] + "...";
+    }
+
+    private static HashSet<string> BuildAllowedCitationsSet(IReadOnlyList<RetrievedChunk> chunks)
+    {
+        return chunks
+            .Select(c => $"[{c.DocId}|{c.SectionTitle}|{c.ChunkIndex}]")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 }
