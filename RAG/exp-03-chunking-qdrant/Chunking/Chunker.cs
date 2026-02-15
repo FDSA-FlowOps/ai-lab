@@ -1,13 +1,7 @@
-using System.Text.RegularExpressions;
-
 namespace Exp03ChunkingQdrant.Chunking;
 
 public static class Chunker
 {
-    private static readonly Regex HeaderRegex = new(
-        @"^(#{1,3})\s+(.+)$",
-        RegexOptions.Multiline | RegexOptions.Compiled);
-
     public static List<DocumentChunk> BuildChunks(
         DocumentData doc,
         ChunkingSettings settings)
@@ -22,50 +16,48 @@ public static class Chunker
 
     private static List<DocumentChunk> ChunkMarkdownAware(DocumentData doc, ChunkingSettings settings)
     {
-        var matches = HeaderRegex.Matches(doc.Text);
-        if (matches.Count == 0)
+        var headers = ExtractHeadersOutsideFences(doc.Text);
+        if (headers.Count == 0)
         {
             return ChunkFixed(doc, settings, sectionTitle: "(Documento)");
         }
 
         var output = new List<DocumentChunk>();
-        for (var i = 0; i < matches.Count; i++)
+        if (headers[0].Index > 0)
         {
-            var match = matches[i];
-            var start = match.Index;
-            var end = i < matches.Count - 1 ? matches[i + 1].Index : doc.Text.Length;
+            var preambleText = doc.Text[..headers[0].Index];
+            if (!string.IsNullOrWhiteSpace(preambleText))
+            {
+                output.AddRange(ChunkOrSection(
+                    doc,
+                    settings,
+                    preambleText,
+                    "(Preambulo)",
+                    0));
+            }
+        }
+
+        for (var i = 0; i < headers.Count; i++)
+        {
+            var start = headers[i].Index;
+            var end = i < headers.Count - 1 ? headers[i + 1].Index : doc.Text.Length;
             if (end <= start)
             {
                 continue;
             }
 
-            var sectionText = doc.Text[start..end].Trim();
-            if (sectionText.Length == 0)
+            var sectionText = doc.Text[start..end];
+            if (string.IsNullOrWhiteSpace(sectionText))
             {
                 continue;
             }
 
-            var sectionTitle = match.Groups[2].Value.Trim();
-            if (sectionText.Length <= settings.MaxChunkChars && sectionText.Length >= settings.MinChunkChars)
-            {
-                output.Add(new DocumentChunk
-                {
-                    DocId = doc.DocId,
-                    DocTitle = doc.Title,
-                    SectionTitle = sectionTitle,
-                    ChunkText = sectionText,
-                    StartChar = start,
-                    EndChar = end,
-                    Strategy = settings.Strategy,
-                    ChunkSize = settings.ChunkSizeChars,
-                    Overlap = settings.ChunkOverlapChars
-                });
-                continue;
-            }
-
-            var sectionDoc = new DocumentData(doc.DocId, doc.Title, sectionText, doc.SourcePath);
-            var split = ChunkFixed(sectionDoc, settings, sectionTitle, start);
-            output.AddRange(split);
+            output.AddRange(ChunkOrSection(
+                doc,
+                settings,
+                sectionText,
+                headers[i].Title,
+                start));
         }
 
         return Reindex(output);
@@ -96,16 +88,21 @@ public static class Chunker
         var pos = 0;
         while (pos < text.Length)
         {
-            var end = Math.Min(text.Length, pos + effectiveSize);
-            var len = end - pos;
-
-            if (len < settings.MinChunkChars && pos > 0)
+            var remaining = text.Length - pos;
+            if (remaining < settings.MinChunkChars && pos > 0)
             {
                 break;
             }
 
-            var raw = text[pos..end].Trim();
-            if (raw.Length >= settings.MinChunkChars || (pos == 0 && raw.Length > 0))
+            var preferredEnd = Math.Min(text.Length, pos + effectiveSize);
+            var end = FindSmartCut(text, pos, preferredEnd, settings.MinChunkChars);
+            if (end <= pos)
+            {
+                end = preferredEnd;
+            }
+
+            var raw = text[pos..end];
+            if (raw.Trim().Length >= settings.MinChunkChars || chunks.Count == 0)
             {
                 chunks.Add(new DocumentChunk
                 {
@@ -126,10 +123,151 @@ public static class Chunker
                 break;
             }
 
-            pos += step;
+            var next = end - overlap;
+            pos = next > pos ? next : pos + step;
         }
 
         return Reindex(chunks);
+    }
+
+    private static List<DocumentChunk> ChunkOrSection(
+        DocumentData doc,
+        ChunkingSettings settings,
+        string sectionText,
+        string sectionTitle,
+        int startOffset)
+    {
+        var trimmedLength = sectionText.Trim().Length;
+        if (trimmedLength == 0)
+        {
+            return [];
+        }
+
+        if (sectionText.Length <= settings.MaxChunkChars && trimmedLength >= settings.MinChunkChars)
+        {
+            return
+            [
+                new DocumentChunk
+                {
+                    DocId = doc.DocId,
+                    DocTitle = doc.Title,
+                    SectionTitle = sectionTitle,
+                    ChunkText = sectionText,
+                    StartChar = startOffset,
+                    EndChar = startOffset + sectionText.Length,
+                    Strategy = settings.Strategy,
+                    ChunkSize = settings.ChunkSizeChars,
+                    Overlap = settings.ChunkOverlapChars
+                }
+            ];
+        }
+
+        var sectionDoc = new DocumentData(doc.DocId, doc.Title, sectionText, doc.SourcePath);
+        return ChunkFixed(sectionDoc, settings, sectionTitle, startOffset);
+    }
+
+    private static int FindSmartCut(string text, int start, int preferredEnd, int minChunkChars)
+    {
+        if (preferredEnd - start <= minChunkChars)
+        {
+            return preferredEnd;
+        }
+
+        var backWindow = 120;
+        var searchStart = Math.Max(start + minChunkChars, preferredEnd - backWindow);
+        if (searchStart >= preferredEnd)
+        {
+            return preferredEnd;
+        }
+
+        var segment = text[searchStart..preferredEnd];
+
+        var paragraphBreak = segment.LastIndexOf("\n\n", StringComparison.Ordinal);
+        if (paragraphBreak >= 0)
+        {
+            return searchStart + paragraphBreak + 2;
+        }
+
+        var punct = segment.LastIndexOfAny(['.', '?', '!']);
+        if (punct >= 0)
+        {
+            return searchStart + punct + 1;
+        }
+
+        var lineBreak = segment.LastIndexOf('\n');
+        if (lineBreak >= 0)
+        {
+            return searchStart + lineBreak + 1;
+        }
+
+        return preferredEnd;
+    }
+
+    private static List<(int Index, string Title)> ExtractHeadersOutsideFences(string markdown)
+    {
+        var headers = new List<(int Index, string Title)>();
+        var inFence = false;
+        var i = 0;
+        while (i < markdown.Length)
+        {
+            var lineStart = i;
+            var lineEnd = markdown.IndexOf('\n', i);
+            var hasNewLine = lineEnd >= 0;
+            if (!hasNewLine)
+            {
+                lineEnd = markdown.Length;
+            }
+
+            var line = markdown[lineStart..lineEnd];
+            var trimmed = line.TrimStart();
+
+            if (IsFence(trimmed))
+            {
+                inFence = !inFence;
+            }
+            else if (!inFence && TryParseHeader(trimmed, out var title))
+            {
+                headers.Add((lineStart, title));
+            }
+
+            i = hasNewLine ? lineEnd + 1 : markdown.Length;
+        }
+
+        return headers;
+    }
+
+    private static bool IsFence(string line)
+    {
+        return line.StartsWith("```", StringComparison.Ordinal) ||
+               line.StartsWith("~~~", StringComparison.Ordinal);
+    }
+
+    private static bool TryParseHeader(string line, out string title)
+    {
+        title = string.Empty;
+        if (line.Length < 3 || line[0] != '#')
+        {
+            return false;
+        }
+
+        var level = 0;
+        while (level < line.Length && line[level] == '#')
+        {
+            level++;
+        }
+
+        if (level is < 1 or > 3)
+        {
+            return false;
+        }
+
+        if (level >= line.Length || line[level] != ' ')
+        {
+            return false;
+        }
+
+        title = line[(level + 1)..].Trim();
+        return title.Length > 0;
     }
 
     private static List<DocumentChunk> Reindex(List<DocumentChunk> chunks)
