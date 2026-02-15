@@ -44,16 +44,14 @@ if (!await CanConnectToOllamaAsync(ollamaBaseUrl))
 
 try
 {
-    using var chatClient = BuildChatClient(ollamaBaseUrl, ollamaModel);
-
     Console.WriteLine($"[INFO] Using Ollama model '{ollamaModel}' at {ollamaBaseUrl}");
     Console.WriteLine("[INFO] Running Architecture Council concurrent analysis...");
 
-    var councilNotes = await RunCouncilConcurrentAsync(chatClient, spec, ollamaModel);
+    var councilNotes = await RunCouncilConcurrentAsync(ollamaBaseUrl, spec, ollamaModel);
 
     Console.WriteLine("[INFO] Running Writer/Reviewer group chat (4 iterations)...");
 
-    var finalPlan = await RunWriterReviewerAsync(chatClient, spec, councilNotes, ollamaModel);
+    var finalPlan = await RunWriterReviewerAsync(ollamaBaseUrl, spec, councilNotes, ollamaModel);
 
     Console.WriteLine();
     Console.WriteLine("===== FINAL ARCHITECTURE COUNCIL PLAN =====");
@@ -121,39 +119,83 @@ static ChatClientAgent MakeAgent(IChatClient client, string name, string instruc
         services: null);
 }
 
-static async Task<string> RunCouncilConcurrentAsync(IChatClient client, string spec, string model)
+static async Task<string> RunCouncilConcurrentAsync(string baseUrl, string spec, string model)
 {
-    var architect = MakeAgent(client,
+    using var architectClient = BuildChatClient(baseUrl, model);
+    using var securityClient = BuildChatClient(baseUrl, model);
+    using var sreClient = BuildChatClient(baseUrl, model);
+    using var pmClient = BuildChatClient(baseUrl, model);
+    using var devilClient = BuildChatClient(baseUrl, model);
+
+    var architect = MakeAgent(
+        architectClient,
         "Architect",
         "You are the system architect. Focus on architecture shape, boundaries, dependencies, data model, and trade-offs. Keep it concrete.",
         "System architecture lead");
 
-    var security = MakeAgent(client,
+    var security = MakeAgent(
+        securityClient,
         "Security",
         "You are the security engineer. Focus on authn/authz, data protection, secrets, abuse prevention, and compliance implications.",
         "Security specialist");
 
-    var sre = MakeAgent(client,
+    var sre = MakeAgent(
+        sreClient,
         "SRE",
         "You are the SRE. Focus on reliability, SLOs, rollback, failure domains, observability, and operability.",
         "Reliability engineer");
 
-    var pm = MakeAgent(client,
+    var pm = MakeAgent(
+        pmClient,
         "PM",
         "You are the product manager. Focus on scope, user impact, sequencing, non-goals, and measurable outcomes.",
         "Product manager");
 
-    var devilsAdvocate = MakeAgent(client,
-        "DevilsAdvocate",
+    var devilsAdvocate = MakeAgent(
+        devilClient,
+        "Devil's Advocate",
         "You are Devil's Advocate. Challenge assumptions aggressively. Output only risks, edge cases, and uncomfortable questions. Include sections: 'How this fails in production' and 'Abuse cases'. Do not propose pretty solutions without a risk justification.",
         "Critical risk challenger");
 
     var councilAgents = new[] { architect, security, sre, pm, devilsAdvocate };
+    var roleOrder = new[] { "Architect", "Security", "SRE", "PM", "Devil's Advocate" };
 
     var workflow = AgentWorkflowBuilder.BuildConcurrent(
         "arch-council-concurrent",
         councilAgents,
-        aggregator: null);
+        aggregator: perAgentMessages =>
+        {
+            var sb = new StringBuilder();
+
+            for (var i = 0; i < perAgentMessages.Count; i++)
+            {
+                var role = i < roleOrder.Length ? roleOrder[i] : $"Agent-{i + 1}";
+                var content = perAgentMessages[i]
+                    .Select(m => m.Text?.Trim())
+                    .Where(t => !string.IsNullOrWhiteSpace(t))
+                    .ToList();
+
+                if (content.Count == 0)
+                {
+                    continue;
+                }
+
+                sb.AppendLine($"## {role}");
+                foreach (var text in content.Distinct(StringComparer.Ordinal))
+                {
+                    sb.AppendLine(text);
+                }
+                sb.AppendLine();
+            }
+
+            var notes = sb.ToString().Trim();
+            return
+            [
+                new AiChatMessage(
+                    ChatRole.Assistant,
+                    string.IsNullOrWhiteSpace(notes) ? "No council notes generated." : notes)
+            ];
+        });
 
     var input = new List<AiChatMessage>
     {
@@ -163,7 +205,7 @@ static async Task<string> RunCouncilConcurrentAsync(IChatClient client, string s
     var run = await InProcessExecution.RunAsync(workflow, input);
     EnsureRunSucceeded(run, model);
 
-    var notes = CollectWorkflowText(run);
+    var notes = CollectLatestWorkflowText(run);
     if (string.IsNullOrWhiteSpace(notes))
     {
         throw new InvalidOperationException("Concurrent workflow did not produce notes.");
@@ -172,14 +214,17 @@ static async Task<string> RunCouncilConcurrentAsync(IChatClient client, string s
     return notes;
 }
 
-static async Task<string> RunWriterReviewerAsync(IChatClient client, string spec, string councilNotes, string model)
+static async Task<string> RunWriterReviewerAsync(string baseUrl, string spec, string councilNotes, string model)
 {
-    var writer = MakeAgent(client,
+    using var writerClient = BuildChatClient(baseUrl, model);
+    using var reviewerClient = BuildChatClient(baseUrl, model);
+
+    var writer = MakeAgent(writerClient,
         "Writer",
         "You write the final plan. Obey exact output format and include concrete detail. Keep concise but complete.",
         "Plan writer");
 
-    var reviewer = MakeAgent(client,
+    var reviewer = MakeAgent(reviewerClient,
         "Reviewer",
         "You are a strict reviewer. Detect gaps and force improvements. Explicitly check rollout/rollback, observability, security, and idempotency before approving.",
         "Plan reviewer");
@@ -200,59 +245,216 @@ static async Task<string> RunWriterReviewerAsync(IChatClient client, string spec
         new(ChatRole.User, BuildWriterReviewerPrompt(spec, councilNotes)),
     };
 
+    var outputBuffer = new Dictionary<string, string>(StringComparer.Ordinal);
+    var lastUsefulMessage = string.Empty;
+    var streamingErrors = new List<string>();
+
+    await using (var streamingRun = await InProcessExecution.StreamAsync(workflow, input))
+    {
+        await foreach (var evt in streamingRun.WatchStreamAsync())
+        {
+            if (evt is WorkflowErrorEvent workflowError && workflowError.Exception is not null)
+            {
+                streamingErrors.Add(workflowError.Exception.Message);
+                continue;
+            }
+
+            if (evt is ExecutorFailedEvent executorFailed && executorFailed.Data is not null)
+            {
+                streamingErrors.Add(executorFailed.Data.Message);
+                continue;
+            }
+
+            if (evt is ExecutorCompletedEvent completedEvent)
+            {
+                Console.WriteLine($"[stream:{completedEvent.ExecutorId}] completed");
+            }
+
+            if (evt is not WorkflowOutputEvent outputEvent)
+            {
+                var fromAny = ExtractStreamEventText(evt);
+                if (!string.IsNullOrWhiteSpace(fromAny))
+                {
+                    lastUsefulMessage = fromAny;
+                }
+                continue;
+            }
+
+            var source = string.IsNullOrWhiteSpace(outputEvent.SourceId) ? "group-chat" : outputEvent.SourceId;
+            var emitted = ExtractOutputText(outputEvent);
+            if (string.IsNullOrWhiteSpace(emitted))
+            {
+                continue;
+            }
+
+            if (outputBuffer.TryGetValue(source, out var seen) && string.Equals(seen, emitted, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            outputBuffer[source] = emitted;
+            lastUsefulMessage = emitted;
+            Console.WriteLine($"[stream:{source}] {ShortLine(emitted, 280)}");
+        }
+
+        var status = await streamingRun.GetStatusAsync();
+        if (status != RunStatus.Ended && status != RunStatus.Idle)
+        {
+            streamingErrors.Add($"unexpected status: {status}");
+        }
+    }
+
+    if (streamingErrors.Count > 0)
+    {
+        throw new InvalidOperationException($"Streaming group chat failed: {string.Join(" | ", streamingErrors.Distinct())}");
+    }
+
+    if (!string.IsNullOrWhiteSpace(lastUsefulMessage))
+    {
+        return lastUsefulMessage;
+    }
+
+    // Fallback to non-streaming if provider/framework emitted no WorkflowOutput events.
     var run = await InProcessExecution.RunAsync(workflow, input);
     EnsureRunSucceeded(run, model);
-    var finalText = CollectWorkflowText(run);
-
-    if (string.IsNullOrWhiteSpace(finalText))
+    var fallback = CollectLatestWorkflowText(run);
+    if (string.IsNullOrWhiteSpace(fallback))
     {
         throw new InvalidOperationException("Group chat workflow did not produce final plan.");
     }
 
-    return finalText;
+    return fallback;
 }
 
-static string CollectWorkflowText(Run run)
+static string CollectLatestWorkflowText(Run run)
 {
-    var sb = new StringBuilder();
-    var eventTypes = new HashSet<string>(StringComparer.Ordinal);
+    string? latest = null;
 
     foreach (var evt in run.OutgoingEvents)
     {
-        eventTypes.Add(evt.GetType().FullName ?? evt.GetType().Name);
-
-        if (evt is WorkflowOutputEvent outputEvent)
+        if (evt is not WorkflowOutputEvent outputEvent)
         {
-            if (outputEvent.Is<AgentResponse>(out var response) && response is not null)
+            continue;
+        }
+
+        if (outputEvent.Is<AgentResponse>(out var response) && !string.IsNullOrWhiteSpace(response?.Text))
+        {
+            latest = response.Text.Trim();
+        }
+
+        if (outputEvent.Is<List<AiChatMessage>>(out var messages) && messages is not null)
+        {
+            foreach (var msg in messages)
             {
-                AppendAgentResponseText(sb, response);
+                if (!string.IsNullOrWhiteSpace(msg.Text))
+                {
+                    latest = msg.Text.Trim();
+                }
+            }
+        }
+
+        if (outputEvent.Is<AiChatMessage>(out var singleMessage) && !string.IsNullOrWhiteSpace(singleMessage?.Text))
+        {
+            latest = singleMessage.Text.Trim();
+        }
+    }
+
+    if (string.IsNullOrWhiteSpace(latest))
+    {
+        throw new InvalidOperationException("No latest workflow text output found.");
+    }
+
+    return latest;
+}
+
+static string? ExtractOutputText(WorkflowOutputEvent outputEvent)
+{
+    if (outputEvent.Is<AgentResponse>(out var response) && !string.IsNullOrWhiteSpace(response?.Text))
+    {
+        return response.Text.Trim();
+    }
+
+    if (outputEvent.Is<List<AiChatMessage>>(out var messages) && messages is not null)
+    {
+        var sb = new StringBuilder();
+        foreach (var msg in messages)
+        {
+            if (!string.IsNullOrWhiteSpace(msg.Text))
+            {
+                sb.AppendLine(msg.Text.Trim());
+            }
+        }
+
+        var text = sb.ToString().Trim();
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            return text;
+        }
+    }
+
+    if (outputEvent.Is<AiChatMessage>(out var singleMessage) && !string.IsNullOrWhiteSpace(singleMessage?.Text))
+    {
+        return singleMessage.Text.Trim();
+    }
+
+    if (outputEvent.Is<string>(out var textContent) && !string.IsNullOrWhiteSpace(textContent))
+    {
+        return textContent.Trim();
+    }
+
+    return null;
+}
+
+static string? ExtractStreamEventText(WorkflowEvent evt)
+{
+    if (evt is ExecutorEvent executorEvent)
+    {
+        if (executorEvent.Data is AgentResponse response && !string.IsNullOrWhiteSpace(response.Text))
+        {
+            return response.Text.Trim();
+        }
+
+        if (executorEvent.Data is AgentResponseUpdate update && !string.IsNullOrWhiteSpace(update.Text))
+        {
+            return update.Text.Trim();
+        }
+
+        if (executorEvent.Data is AiChatMessage chatMessage && !string.IsNullOrWhiteSpace(chatMessage.Text))
+        {
+            return chatMessage.Text.Trim();
+        }
+
+        if (executorEvent.Data is IEnumerable<AiChatMessage> chatMessages)
+        {
+            var sb = new StringBuilder();
+            foreach (var msg in chatMessages)
+            {
+                if (!string.IsNullOrWhiteSpace(msg.Text))
+                {
+                    sb.AppendLine(msg.Text.Trim());
+                }
             }
 
-            if (outputEvent.Is<List<AiChatMessage>>(out var messages) && messages is not null)
+            var text = sb.ToString().Trim();
+            if (!string.IsNullOrWhiteSpace(text))
             {
-                AppendMessagesText(sb, messages);
-            }
-
-            if (outputEvent.Is<AiChatMessage>(out var singleMessage) && singleMessage is not null)
-            {
-                AppendMessageText(sb, singleMessage);
-            }
-
-            if (outputEvent.Is<string>(out var text) && !string.IsNullOrWhiteSpace(text))
-            {
-                sb.AppendLine(text.Trim());
+                return text;
             }
         }
     }
 
-    var textResult = sb.ToString().Trim();
-    if (string.IsNullOrWhiteSpace(textResult))
+    return null;
+}
+
+static string ShortLine(string text, int max)
+{
+    var oneLine = text.Replace("\r", " ").Replace("\n", " ").Trim();
+    if (oneLine.Length <= max)
     {
-        throw new InvalidOperationException(
-            $"No workflow text output found. Event types: {string.Join(", ", eventTypes)}");
+        return oneLine;
     }
 
-    return textResult;
+    return oneLine[..max] + "...";
 }
 
 static void EnsureRunSucceeded(Run run, string model)
@@ -288,35 +490,6 @@ static void EnsureRunSucceeded(Run run, string model)
     }
 
     throw new InvalidOperationException($"Workflow failed: {joined}");
-}
-
-static void AppendAgentResponseText(StringBuilder sb, AgentResponse response)
-{
-    if (!string.IsNullOrWhiteSpace(response.Text))
-    {
-        sb.AppendLine(response.Text.Trim());
-    }
-
-    if (response.Messages is { Count: > 0 })
-    {
-        AppendMessagesText(sb, response.Messages);
-    }
-}
-
-static void AppendMessagesText(StringBuilder sb, IEnumerable<AiChatMessage> messages)
-{
-    foreach (var msg in messages)
-    {
-        AppendMessageText(sb, msg);
-    }
-}
-
-static void AppendMessageText(StringBuilder sb, AiChatMessage message)
-{
-    if (!string.IsNullOrWhiteSpace(message.Text))
-    {
-        sb.AppendLine(message.Text.Trim());
-    }
 }
 
 static string BuildCouncilPrompt(string spec)
