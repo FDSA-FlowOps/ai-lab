@@ -68,6 +68,13 @@ curl http://localhost:6333/collections
 curl http://localhost:11434/api/tags
 ```
 
+En Windows PowerShell, usa `curl.exe` para evitar el alias de `curl`:
+
+```powershell
+curl.exe http://localhost:6333/collections
+curl.exe http://localhost:11434/api/tags
+```
+
 ## Comandos CLI
 
 ### 0) Modo interactivo (recomendado para pruebas)
@@ -123,6 +130,8 @@ Ejemplo de salida:
 
 ```text
 Top 5 resultados para: "quiero cancelar mi plan antes de la renovacion"
+top1_score=0.9012 | gap(top1-top2)=0.0213
+
 1. score=0.9012 | doc_id=SUP-007 | title=Cancelar suscripcion antes de renovar
    snippet: Pasos para dar de baja el plan mensual antes de la fecha de renovacion automatica.
 2. score=0.8799 | doc_id=SUP-009 | title=Desactivar renovacion automatica

@@ -226,6 +226,12 @@ static async Task<int> RunQueryAsync(
         return 0;
     }
 
+    var top1 = results[0].Score;
+    var top2 = results.Count > 1 ? results[1].Score : 0d;
+    var gap = results.Count > 1 ? top1 - top2 : top1;
+    Console.WriteLine($"top1_score={top1:0.0000} | gap(top1-top2)={gap:0.0000}");
+    Console.WriteLine();
+
     for (var i = 0; i < results.Count; i++)
     {
         var r = results[i];
