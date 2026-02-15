@@ -111,16 +111,18 @@ static async Task AskQuestionAsync(
     }
 
     var result = await rag.AskAsync(question, runtime, cancellationToken);
-    Console.WriteLine($"top1_score={result.Top1Score:0.0000} (min requerido={runtime.MinRetrievalScore:0.00})");
+    Console.WriteLine($"top1_score={result.Top1Score:0.0000} | gap(top1-top2)={result.GapTop1Top2:0.0000}");
+    Console.WriteLine($"minScore={runtime.MinRetrievalScore:0.00} | minGap={runtime.MinRetrievalGap:0.00}");
+    if (result.IsAmbiguous)
+    {
+        Console.WriteLine("[WARN] Ambiguedad de retrieval detectada (gap bajo).");
+    }
     Console.WriteLine();
     Console.WriteLine("Respuesta:");
     Console.WriteLine(result.Answer);
     Console.WriteLine();
 
-    var cites = result.Citations.Count > 0
-        ? string.Join(", ", result.Citations)
-        : "(sin citas detectadas en respuesta)";
-    Console.WriteLine($"Citas usadas: {cites}");
+    Console.WriteLine($"Citas usadas: {string.Join(", ", result.Citations)}");
 
     if (runtime.ShowDebug)
     {
@@ -178,6 +180,7 @@ static void ChangeRuntimeSettings(RuntimeSettings runtime)
 {
     runtime.TopK = PromptPositiveInt("TopK", runtime.TopK);
     runtime.MinRetrievalScore = PromptDouble("Min retrieval score", runtime.MinRetrievalScore);
+    runtime.MinRetrievalGap = PromptDouble("Min retrieval gap", runtime.MinRetrievalGap);
     runtime.ShowDebug = PromptBool("Show debug", runtime.ShowDebug);
     runtime.ChunkSizeChars = PromptPositiveInt("Chunk size chars", runtime.ChunkSizeChars);
     runtime.ChunkOverlapChars = PromptNonNegativeInt("Chunk overlap chars", runtime.ChunkOverlapChars);
@@ -269,7 +272,8 @@ static void PrintMenu(AppConfig config, RuntimeSettings runtime)
     Console.WriteLine($"Collection: {config.QdrantCollection}");
     Console.WriteLine($"Embed model: {config.OllamaEmbedModel}");
     Console.WriteLine($"Chat model: {config.OllamaChatModel}");
-    Console.WriteLine($"topK={runtime.TopK} | minScore={runtime.MinRetrievalScore:0.00} | showDebug={runtime.ShowDebug}");
+    Console.WriteLine($"topK={runtime.TopK} | minScore={runtime.MinRetrievalScore:0.00} | minGap={runtime.MinRetrievalGap:0.00} | showDebug={runtime.ShowDebug}");
+    Console.WriteLine($"chatOptions: temperature={config.ChatTemperature:0.00}, top_p={config.ChatTopP:0.00}, num_ctx={config.ChatNumCtx}");
     Console.WriteLine($"chunkSize={runtime.ChunkSizeChars} | overlap={runtime.ChunkOverlapChars} | minChunk={runtime.MinChunkChars}");
     Console.WriteLine();
     Console.WriteLine("1) Reset collection");

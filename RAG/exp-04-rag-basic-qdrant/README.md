@@ -21,11 +21,15 @@ Experimento independiente de RAG basico con Qdrant + Ollama:
 - `QDRANT_COLLECTION=exp04_rag`
 - `TOP_K=6`
 - `MIN_RETRIEVAL_SCORE=0.60`
+- `MIN_RETRIEVAL_GAP=0.02`
 - `CHUNK_SIZE_CHARS=900`
 - `CHUNK_OVERLAP_CHARS=140`
 - `MIN_CHUNK_CHARS=220`
 - `HTTP_TIMEOUT_SECONDS=60`
 - `SHOW_DEBUG=true`
+- `CHAT_TEMPERATURE=0.2`
+- `CHAT_TOP_P=0.9`
+- `CHAT_NUM_CTX=8192`
 
 ## Levantar servicios
 
@@ -78,6 +82,10 @@ dotnet run
 
 Si `top1_score < MIN_RETRIEVAL_SCORE`, no se llama al LLM y el sistema responde:
 `No tengo evidencia suficiente en los documentos indexados.`
+
+Si la respuesta del LLM llega sin citas, tambien se trata como fallo de grounding y se devuelve el mismo mensaje de no evidencia.
+
+Si `gap(top1-top2) < MIN_RETRIEVAL_GAP`, el sistema marca ambiguedad de retrieval y fuerza respuesta conservadora.
 
 ## Ejemplo de salida (ask)
 

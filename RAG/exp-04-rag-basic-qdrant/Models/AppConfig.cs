@@ -12,11 +12,15 @@ public sealed class AppConfig
     public required string QdrantCollection { get; init; }
     public required int TopK { get; init; }
     public required double MinRetrievalScore { get; init; }
+    public required double MinRetrievalGap { get; init; }
     public required int ChunkSizeChars { get; init; }
     public required int ChunkOverlapChars { get; init; }
     public required int MinChunkChars { get; init; }
     public required int HttpTimeoutSeconds { get; init; }
     public required bool ShowDebug { get; init; }
+    public required double ChatTemperature { get; init; }
+    public required double ChatTopP { get; init; }
+    public required int ChatNumCtx { get; init; }
 
     public static AppConfig Load(string root)
     {
@@ -27,11 +31,15 @@ public sealed class AppConfig
 
         var topK = ParsePositiveInt(GetValue("TOP_K", file?.TopK?.ToString(), "6"), "TOP_K");
         var minScore = ParseDoubleFlexible(GetValue("MIN_RETRIEVAL_SCORE", file?.MinRetrievalScore?.ToString(CultureInfo.InvariantCulture), "0.60"), "MIN_RETRIEVAL_SCORE");
+        var minGap = ParseDoubleFlexible(GetValue("MIN_RETRIEVAL_GAP", file?.MinRetrievalGap?.ToString(CultureInfo.InvariantCulture), "0.02"), "MIN_RETRIEVAL_GAP");
         var chunkSize = ParsePositiveInt(GetValue("CHUNK_SIZE_CHARS", file?.ChunkSizeChars?.ToString(), "900"), "CHUNK_SIZE_CHARS");
         var chunkOverlap = ParseNonNegativeInt(GetValue("CHUNK_OVERLAP_CHARS", file?.ChunkOverlapChars?.ToString(), "140"), "CHUNK_OVERLAP_CHARS");
         var minChunk = ParsePositiveInt(GetValue("MIN_CHUNK_CHARS", file?.MinChunkChars?.ToString(), "220"), "MIN_CHUNK_CHARS");
         var timeout = ParsePositiveInt(GetValue("HTTP_TIMEOUT_SECONDS", file?.HttpTimeoutSeconds?.ToString(), "60"), "HTTP_TIMEOUT_SECONDS");
         var showDebug = ParseBool(GetValue("SHOW_DEBUG", file?.ShowDebug?.ToString(), "true"), "SHOW_DEBUG");
+        var chatTemp = ParseDoubleFlexible(GetValue("CHAT_TEMPERATURE", file?.ChatTemperature?.ToString(CultureInfo.InvariantCulture), "0.2"), "CHAT_TEMPERATURE");
+        var chatTopP = ParseDoubleFlexible(GetValue("CHAT_TOP_P", file?.ChatTopP?.ToString(CultureInfo.InvariantCulture), "0.9"), "CHAT_TOP_P");
+        var chatNumCtx = ParsePositiveInt(GetValue("CHAT_NUM_CTX", file?.ChatNumCtx?.ToString(), "8192"), "CHAT_NUM_CTX");
 
         if (chunkOverlap >= chunkSize)
         {
@@ -47,11 +55,15 @@ public sealed class AppConfig
             QdrantCollection = GetValue("QDRANT_COLLECTION", file?.QdrantCollection, "exp04_rag"),
             TopK = topK,
             MinRetrievalScore = minScore,
+            MinRetrievalGap = minGap,
             ChunkSizeChars = chunkSize,
             ChunkOverlapChars = chunkOverlap,
             MinChunkChars = minChunk,
             HttpTimeoutSeconds = timeout,
-            ShowDebug = showDebug
+            ShowDebug = showDebug,
+            ChatTemperature = chatTemp,
+            ChatTopP = chatTopP,
+            ChatNumCtx = chatNumCtx
         };
     }
 
@@ -61,6 +73,7 @@ public sealed class AppConfig
         {
             TopK = TopK,
             MinRetrievalScore = MinRetrievalScore,
+            MinRetrievalGap = MinRetrievalGap,
             ShowDebug = ShowDebug,
             ChunkSizeChars = ChunkSizeChars,
             ChunkOverlapChars = ChunkOverlapChars,
@@ -139,10 +152,14 @@ public sealed class AppConfig
         public string? QdrantCollection { get; init; }
         public int? TopK { get; init; }
         public double? MinRetrievalScore { get; init; }
+        public double? MinRetrievalGap { get; init; }
         public int? ChunkSizeChars { get; init; }
         public int? ChunkOverlapChars { get; init; }
         public int? MinChunkChars { get; init; }
         public int? HttpTimeoutSeconds { get; init; }
         public bool? ShowDebug { get; init; }
+        public double? ChatTemperature { get; init; }
+        public double? ChatTopP { get; init; }
+        public int? ChatNumCtx { get; init; }
     }
 }

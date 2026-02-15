@@ -32,6 +32,7 @@ public sealed class RuntimeSettings
 {
     public int TopK { get; set; }
     public double MinRetrievalScore { get; set; }
+    public double MinRetrievalGap { get; set; }
     public bool ShowDebug { get; set; }
     public int ChunkSizeChars { get; set; }
     public int ChunkOverlapChars { get; set; }
@@ -54,4 +55,6 @@ public sealed class RagAnswerResult
     public List<RetrievedChunk> Retrieved { get; init; } = [];
     public List<string> Citations { get; init; } = [];
     public double Top1Score { get; init; }
+    public double GapTop1Top2 { get; init; }
+    public bool IsAmbiguous { get; init; }
 }

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Exp04RagBasicQdrant.Ollama;
 
@@ -27,6 +28,9 @@ public sealed class OllamaChatClient : IDisposable
         string model,
         string systemPrompt,
         string userPrompt,
+        double temperature,
+        double topP,
+        int numCtx,
         CancellationToken cancellationToken)
     {
         HttpResponseMessage response;
@@ -40,7 +44,8 @@ public sealed class OllamaChatClient : IDisposable
                     [
                         new ChatMessage("system", systemPrompt),
                         new ChatMessage("user", userPrompt)
-                    ]),
+                    ],
+                    new ChatOptions(temperature, topP, numCtx)),
                 cancellationToken);
         }
         catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
@@ -104,7 +109,30 @@ public sealed class OllamaChatClient : IDisposable
         return body.Length <= 300 ? body : body[..300] + "...";
     }
 
-    private sealed record ChatRequest(string Model, bool Stream, IReadOnlyList<ChatMessage> Messages);
+    private sealed record ChatRequest(
+        string Model,
+        bool Stream,
+        IReadOnlyList<ChatMessage> Messages,
+        ChatOptions Options);
+
+    private sealed class ChatOptions
+    {
+        public ChatOptions(double temperature, double topP, int numCtx)
+        {
+            Temperature = temperature;
+            TopP = topP;
+            NumCtx = numCtx;
+        }
+
+        [JsonPropertyName("temperature")]
+        public double Temperature { get; init; }
+
+        [JsonPropertyName("top_p")]
+        public double TopP { get; init; }
+
+        [JsonPropertyName("num_ctx")]
+        public int NumCtx { get; init; }
+    }
     private sealed record ChatMessage(string Role, string Content);
 
     private sealed class ChatResponse
