@@ -49,7 +49,7 @@ try
 
     var councilNotes = await RunCouncilConcurrentAsync(ollamaBaseUrl, spec, ollamaModel);
 
-    Console.WriteLine("[INFO] Running Writer/Reviewer group chat (4 iterations)...");
+    Console.WriteLine("[INFO] Running Writer/Reviewer/Moderator group chat (6 iterations)...");
 
     var finalPlan = await RunWriterReviewerAsync(ollamaBaseUrl, spec, councilNotes, ollamaModel);
 
@@ -216,28 +216,39 @@ static async Task<string> RunCouncilConcurrentAsync(string baseUrl, string spec,
 
 static async Task<string> RunWriterReviewerAsync(string baseUrl, string spec, string councilNotes, string model)
 {
+    const string finalMarker = "=== FINAL PLAN ===";
     using var writerClient = BuildChatClient(baseUrl, model);
     using var reviewerClient = BuildChatClient(baseUrl, model);
+    using var moderatorClient = BuildChatClient(baseUrl, model);
 
     var writer = MakeAgent(writerClient,
         "Writer",
-        "You write the final plan. Obey exact output format and include concrete detail. Keep concise but complete.",
+        "You draft the plan. Output ONLY the plan content. Do not include commentary, review, or preface.",
         "Plan writer");
 
     var reviewer = MakeAgent(reviewerClient,
         "Reviewer",
-        "You are a strict reviewer. Detect gaps and force improvements. Explicitly check rollout/rollback, observability, security, and idempotency before approving.",
+        "You are a strict reviewer. Provide ONLY a numbered list of requested changes. Do not rewrite the document. Explicitly check rollout/rollback, observability, security, and idempotency.",
         "Plan reviewer");
+    var moderator = MakeAgent(moderatorClient,
+        "Moderator",
+        $"You are the finalizer. Output ONLY the final plan. Start with '{finalMarker}' on the first line. No commentary, no suggestions, no meta text.",
+        "Final plan moderator");
+    var trustedStreamExecutors = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        moderator.Id,
+        "GroupChatHost"
+    };
 
     var groupBuilder = AgentWorkflowBuilder.CreateGroupChatBuilderWith(participants =>
     {
         return new RoundRobinGroupChatManager(participants, shouldTerminateFunc: null)
         {
-            MaximumIterationCount = 4,
+            MaximumIterationCount = 6,
         };
     });
 
-    groupBuilder.AddParticipants(new[] { writer, reviewer });
+    groupBuilder.AddParticipants(new[] { writer, reviewer, moderator });
     var workflow = groupBuilder.Build();
 
     var input = new List<AiChatMessage>
@@ -246,7 +257,8 @@ static async Task<string> RunWriterReviewerAsync(string baseUrl, string spec, st
     };
 
     var outputBuffer = new Dictionary<string, string>(StringComparer.Ordinal);
-    var lastUsefulMessage = string.Empty;
+    string? lastModeratorAssistant = null;
+    string? lastMarkerPlan = null;
     var streamingErrors = new List<string>();
 
     await using (var streamingRun = await InProcessExecution.StreamAsync(workflow, input))
@@ -272,16 +284,20 @@ static async Task<string> RunWriterReviewerAsync(string baseUrl, string spec, st
 
             if (evt is not WorkflowOutputEvent outputEvent)
             {
-                var fromAny = ExtractStreamEventText(evt);
+                var fromAny = ExtractStreamEventText(evt, trustedStreamExecutors);
                 if (!string.IsNullOrWhiteSpace(fromAny))
                 {
-                    lastUsefulMessage = fromAny;
+                    var fromMarker = TryExtractFinalPlanFromMarker(fromAny, finalMarker);
+                    if (!string.IsNullOrWhiteSpace(fromMarker))
+                    {
+                        lastMarkerPlan = fromMarker;
+                    }
                 }
                 continue;
             }
 
             var source = string.IsNullOrWhiteSpace(outputEvent.SourceId) ? "group-chat" : outputEvent.SourceId;
-            var emitted = ExtractOutputText(outputEvent);
+            var emitted = ExtractOutputText(outputEvent, trustedStreamExecutors);
             if (string.IsNullOrWhiteSpace(emitted))
             {
                 continue;
@@ -293,7 +309,15 @@ static async Task<string> RunWriterReviewerAsync(string baseUrl, string spec, st
             }
 
             outputBuffer[source] = emitted;
-            lastUsefulMessage = emitted;
+            if (string.Equals(source, moderator.Id, StringComparison.OrdinalIgnoreCase))
+            {
+                lastModeratorAssistant = emitted;
+            }
+            var markerPlan = TryExtractFinalPlanFromMarker(emitted, finalMarker);
+            if (!string.IsNullOrWhiteSpace(markerPlan))
+            {
+                lastMarkerPlan = markerPlan;
+            }
             Console.WriteLine($"[stream:{source}] {ShortLine(emitted, 280)}");
         }
 
@@ -309,136 +333,126 @@ static async Task<string> RunWriterReviewerAsync(string baseUrl, string spec, st
         throw new InvalidOperationException($"Streaming group chat failed: {string.Join(" | ", streamingErrors.Distinct())}");
     }
 
-    if (!string.IsNullOrWhiteSpace(lastUsefulMessage))
+    var streamingCandidate = !string.IsNullOrWhiteSpace(lastMarkerPlan) ? lastMarkerPlan : lastModeratorAssistant;
+    if (!string.IsNullOrWhiteSpace(streamingCandidate))
     {
-        return lastUsefulMessage;
+        var cleaned = CleanFinalPlan(streamingCandidate, finalMarker);
+        cleaned = EnsureDevilsAdvocateRiskCoverage(cleaned, councilNotes);
+        EnsureValidFinalPlan(cleaned);
+        return cleaned;
     }
 
     // Fallback to non-streaming if provider/framework emitted no WorkflowOutput events.
     var run = await InProcessExecution.RunAsync(workflow, input);
     EnsureRunSucceeded(run, model);
-    var fallback = CollectLatestWorkflowText(run);
+    var fallback = ExtractFinalPlanFromRun(run, moderator.Id, trustedStreamExecutors, finalMarker);
     if (string.IsNullOrWhiteSpace(fallback))
     {
-        throw new InvalidOperationException("Group chat workflow did not produce final plan.");
+        throw new InvalidOperationException("Group chat produced no assistant output.");
     }
+    var finalPlan = CleanFinalPlan(fallback, finalMarker);
+    finalPlan = EnsureDevilsAdvocateRiskCoverage(finalPlan, councilNotes);
+    EnsureValidFinalPlan(finalPlan);
 
-    return fallback;
+    return finalPlan;
 }
 
 static string CollectLatestWorkflowText(Run run)
 {
-    string? latest = null;
-
-    foreach (var evt in run.OutgoingEvents)
-    {
-        if (evt is not WorkflowOutputEvent outputEvent)
-        {
-            continue;
-        }
-
-        if (outputEvent.Is<AgentResponse>(out var response) && !string.IsNullOrWhiteSpace(response?.Text))
-        {
-            latest = response.Text.Trim();
-        }
-
-        if (outputEvent.Is<List<AiChatMessage>>(out var messages) && messages is not null)
-        {
-            foreach (var msg in messages)
-            {
-                if (!string.IsNullOrWhiteSpace(msg.Text))
-                {
-                    latest = msg.Text.Trim();
-                }
-            }
-        }
-
-        if (outputEvent.Is<AiChatMessage>(out var singleMessage) && !string.IsNullOrWhiteSpace(singleMessage?.Text))
-        {
-            latest = singleMessage.Text.Trim();
-        }
-    }
-
+    var latest = ExtractFinalPlanFromRun(run, moderatorExecutorId: null, trustedExecutors: null, finalMarker: null);
     if (string.IsNullOrWhiteSpace(latest))
     {
-        throw new InvalidOperationException("No latest workflow text output found.");
+        throw new InvalidOperationException("No assistant output found in workflow run.");
     }
 
     return latest;
 }
 
-static string? ExtractOutputText(WorkflowOutputEvent outputEvent)
+static string? ExtractOutputText(WorkflowOutputEvent outputEvent, ISet<string>? trustedExecutors)
 {
-    if (outputEvent.Is<AgentResponse>(out var response) && !string.IsNullOrWhiteSpace(response?.Text))
-    {
-        return response.Text.Trim();
-    }
-
     if (outputEvent.Is<List<AiChatMessage>>(out var messages) && messages is not null)
     {
-        var sb = new StringBuilder();
-        foreach (var msg in messages)
+        var lastAssistant = GetLastAssistantText(messages);
+        if (!string.IsNullOrWhiteSpace(lastAssistant))
         {
-            if (!string.IsNullOrWhiteSpace(msg.Text))
-            {
-                sb.AppendLine(msg.Text.Trim());
-            }
-        }
-
-        var text = sb.ToString().Trim();
-        if (!string.IsNullOrWhiteSpace(text))
-        {
-            return text;
+            return lastAssistant;
         }
     }
 
-    if (outputEvent.Is<AiChatMessage>(out var singleMessage) && !string.IsNullOrWhiteSpace(singleMessage?.Text))
+    if (outputEvent.Is<AiChatMessage>(out var singleMessage) &&
+        singleMessage is not null &&
+        singleMessage.Role == ChatRole.Assistant &&
+        !string.IsNullOrWhiteSpace(singleMessage.Text))
     {
         return singleMessage.Text.Trim();
     }
 
-    if (outputEvent.Is<string>(out var textContent) && !string.IsNullOrWhiteSpace(textContent))
+    if (outputEvent.Is<AgentResponse>(out var response) && response is not null)
     {
-        return textContent.Trim();
+        var byMessages = GetLastAssistantText(response.Messages ?? []);
+        if (!string.IsNullOrWhiteSpace(byMessages))
+        {
+            return byMessages;
+        }
+
+        // Use free text only from trusted assistant-like executors.
+        if (!string.IsNullOrWhiteSpace(response.Text))
+        {
+            var source = outputEvent.SourceId;
+            if (IsTrustedExecutor(source, trustedExecutors))
+            {
+                return response.Text.Trim();
+            }
+        }
     }
 
+    // Ignore raw string payload by default to avoid returning prompt echo.
     return null;
 }
 
-static string? ExtractStreamEventText(WorkflowEvent evt)
+static string? ExtractStreamEventText(WorkflowEvent evt, ISet<string>? trustedExecutors)
 {
     if (evt is ExecutorEvent executorEvent)
     {
-        if (executorEvent.Data is AgentResponse response && !string.IsNullOrWhiteSpace(response.Text))
+        if (!IsTrustedExecutor(executorEvent.ExecutorId, trustedExecutors))
         {
-            return response.Text.Trim();
+            return null;
         }
 
-        if (executorEvent.Data is AgentResponseUpdate update && !string.IsNullOrWhiteSpace(update.Text))
+        if (executorEvent.Data is AgentResponse response)
+        {
+            var byMessages = GetLastAssistantText(response.Messages ?? []);
+            if (!string.IsNullOrWhiteSpace(byMessages))
+            {
+                return byMessages;
+            }
+
+            if (!string.IsNullOrWhiteSpace(response.Text))
+            {
+                return response.Text.Trim();
+            }
+        }
+
+        if (executorEvent.Data is AgentResponseUpdate update &&
+            update.Role == ChatRole.Assistant &&
+            !string.IsNullOrWhiteSpace(update.Text))
         {
             return update.Text.Trim();
         }
 
-        if (executorEvent.Data is AiChatMessage chatMessage && !string.IsNullOrWhiteSpace(chatMessage.Text))
+        if (executorEvent.Data is AiChatMessage chatMessage &&
+            chatMessage.Role == ChatRole.Assistant &&
+            !string.IsNullOrWhiteSpace(chatMessage.Text))
         {
             return chatMessage.Text.Trim();
         }
 
         if (executorEvent.Data is IEnumerable<AiChatMessage> chatMessages)
         {
-            var sb = new StringBuilder();
-            foreach (var msg in chatMessages)
+            var byMessages = GetLastAssistantText(chatMessages);
+            if (!string.IsNullOrWhiteSpace(byMessages))
             {
-                if (!string.IsNullOrWhiteSpace(msg.Text))
-                {
-                    sb.AppendLine(msg.Text.Trim());
-                }
-            }
-
-            var text = sb.ToString().Trim();
-            if (!string.IsNullOrWhiteSpace(text))
-            {
-                return text;
+                return byMessages;
             }
         }
     }
@@ -455,6 +469,239 @@ static string ShortLine(string text, int max)
     }
 
     return oneLine[..max] + "...";
+}
+
+static string? GetLastAssistantText(IEnumerable<AiChatMessage> messages)
+{
+    string? last = null;
+    foreach (var message in messages)
+    {
+        if (message.Role == ChatRole.Assistant && !string.IsNullOrWhiteSpace(message.Text))
+        {
+            last = message.Text.Trim();
+        }
+    }
+
+    return last;
+}
+
+static string? ExtractFinalPlanFromRun(
+    Run run,
+    string? moderatorExecutorId,
+    ISet<string>? trustedExecutors,
+    string? finalMarker)
+{
+    string? latestAssistant = null;
+    string? latestModeratorAssistant = null;
+    string? latestMarkedPlan = null;
+
+    foreach (var evt in run.OutgoingEvents)
+    {
+        if (evt is not WorkflowOutputEvent outputEvent)
+        {
+            continue;
+        }
+
+        var candidate = ExtractOutputText(outputEvent, trustedExecutors);
+        if (!string.IsNullOrWhiteSpace(candidate))
+        {
+            latestAssistant = candidate;
+            if (!string.IsNullOrWhiteSpace(finalMarker))
+            {
+                var marked = TryExtractFinalPlanFromMarker(candidate, finalMarker);
+                if (!string.IsNullOrWhiteSpace(marked))
+                {
+                    latestMarkedPlan = marked;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(moderatorExecutorId) &&
+                string.Equals(outputEvent.SourceId, moderatorExecutorId, StringComparison.OrdinalIgnoreCase))
+            {
+                latestModeratorAssistant = candidate;
+            }
+        }
+    }
+
+    if (!string.IsNullOrWhiteSpace(latestMarkedPlan))
+    {
+        return latestMarkedPlan;
+    }
+
+    if (!string.IsNullOrWhiteSpace(moderatorExecutorId))
+    {
+        return latestModeratorAssistant;
+    }
+
+    return latestAssistant;
+}
+
+static bool IsTrustedExecutor(string? executorId, ISet<string>? trustedExecutors)
+{
+    if (string.IsNullOrWhiteSpace(executorId))
+    {
+        return false;
+    }
+
+    if (trustedExecutors is null || trustedExecutors.Count == 0)
+    {
+        return true;
+    }
+
+    return trustedExecutors.Contains(executorId);
+}
+
+static void EnsureNotPromptEcho(string text)
+{
+    if (text.Contains("You are in an Architecture Council writer/reviewer loop.", StringComparison.Ordinal))
+    {
+        throw new InvalidOperationException("Group chat produced prompt echo instead of assistant output.");
+    }
+}
+
+static string? TryExtractFinalPlanFromMarker(string text, string marker)
+{
+    var idx = text.IndexOf(marker, StringComparison.Ordinal);
+    if (idx < 0)
+    {
+        return null;
+    }
+
+    return text[idx..].Trim();
+}
+
+static string CleanFinalPlan(string text, string marker)
+{
+    var trimmed = text.Trim();
+    var fromMarker = TryExtractFinalPlanFromMarker(trimmed, marker);
+    return string.IsNullOrWhiteSpace(fromMarker) ? trimmed : fromMarker.Trim();
+}
+
+static void EnsureValidFinalPlan(string text)
+{
+    EnsureNotPromptEcho(text);
+    if (text.Contains("Your revised document", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("here are suggestions", StringComparison.OrdinalIgnoreCase))
+    {
+        throw new InvalidOperationException("Group chat returned editorial feedback instead of a final plan.");
+    }
+
+    var requiredSections = new[]
+    {
+        "Executive summary",
+        "Key decisions",
+        "Risks & mitigations",
+        "Rollout plan",
+        "Definition of Done"
+    };
+
+    foreach (var section in requiredSections)
+    {
+        if (!text.Contains(section, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Final plan missing required section: {section}");
+        }
+    }
+
+    var devilCount = text.Split('\n')
+        .Count(line => line.Contains("[Devil's Advocate]", StringComparison.OrdinalIgnoreCase));
+    if (devilCount < 2)
+    {
+        throw new InvalidOperationException("Final plan must include at least 2 risks tagged with [Devil's Advocate].");
+    }
+}
+
+static string EnsureDevilsAdvocateRiskCoverage(string plan, string councilNotes)
+{
+    var currentTagCount = CountDevilsAdvocateTags(plan);
+    if (currentTagCount >= 2)
+    {
+        return plan;
+    }
+
+    var missing = 2 - currentTagCount;
+    var candidateRisks = ExtractDevilsAdvocateRisks(councilNotes);
+    while (candidateRisks.Count < missing)
+    {
+        candidateRisks.Add("Potential production failure mode requires explicit mitigation and rollback criteria.");
+    }
+
+    var additions = candidateRisks
+        .Take(missing)
+        .Select(r => $"- [Devil's Advocate] {r}")
+        .ToList();
+
+    // Try to append inside Risks & mitigations section before Rollout plan.
+    var riskHeaderIdx = plan.IndexOf("Risks & mitigations", StringComparison.OrdinalIgnoreCase);
+    if (riskHeaderIdx >= 0)
+    {
+        var rolloutIdx = plan.IndexOf("Rollout plan", riskHeaderIdx, StringComparison.OrdinalIgnoreCase);
+        if (rolloutIdx > riskHeaderIdx)
+        {
+            var before = plan[..rolloutIdx].TrimEnd();
+            var after = plan[rolloutIdx..].TrimStart();
+            var injected = $"{before}\n{string.Join('\n', additions)}\n\n{after}";
+            return injected;
+        }
+    }
+
+    // Fallback: append a compact risks section at the end.
+    var sb = new StringBuilder(plan.TrimEnd());
+    sb.AppendLine();
+    sb.AppendLine();
+    sb.AppendLine("Risks & mitigations (auto-added)");
+    foreach (var line in additions)
+    {
+        sb.AppendLine(line);
+    }
+    return sb.ToString().Trim();
+}
+
+static int CountDevilsAdvocateTags(string text)
+{
+    return text.Split('\n')
+        .Count(line => line.Contains("[Devil's Advocate]", StringComparison.OrdinalIgnoreCase));
+}
+
+static List<string> ExtractDevilsAdvocateRisks(string councilNotes)
+{
+    var lines = councilNotes.Replace("\r", "").Split('\n');
+    var risks = new List<string>();
+    var inDevilSection = false;
+
+    foreach (var rawLine in lines)
+    {
+        var line = rawLine.Trim();
+        if (line.StartsWith("## ", StringComparison.Ordinal))
+        {
+            inDevilSection = line.Contains("Devil's Advocate", StringComparison.OrdinalIgnoreCase);
+            continue;
+        }
+
+        if (!inDevilSection || string.IsNullOrWhiteSpace(line))
+        {
+            continue;
+        }
+
+        var cleaned = line.TrimStart('-', '*', ' ', '\t');
+        if (cleaned.Length < 20)
+        {
+            continue;
+        }
+
+        if (cleaned.Contains("mitigation", StringComparison.OrdinalIgnoreCase))
+        {
+            continue;
+        }
+
+        risks.Add(cleaned);
+        if (risks.Count >= 4)
+        {
+            break;
+        }
+    }
+
+    return risks;
 }
 
 static void EnsureRunSucceeded(Run run, string model)
@@ -501,6 +748,9 @@ Return concise notes with:
 - Decisions you recommend
 - Risks
 - Open questions
+Do NOT repeat the prompt text.
+Do NOT restate the full SPEC verbatim.
+Output ONLY your notes.
 
 SPEC:
 {spec}
@@ -512,11 +762,12 @@ static string BuildWriterReviewerPrompt(string spec, string councilNotes)
     return $"""
 You are in an Architecture Council writer/reviewer loop.
 Use the council notes and produce one final answer with the exact required structure.
+Moderator must output the final plan. Writer/Reviewer are internal.
 
 Output sections (mandatory):
 1) Executive summary (3 bullets)
 2) Key decisions (max 5) with trade-offs (pros/cons brief)
-3) Risks & mitigations (must include at least 2 risks raised by Devil's Advocate)
+3) Risks & mitigations (must include at least 2 risks raised by Devil's Advocate, tag those bullets with [Devil's Advocate])
 4) Rollout plan (phased) + rollback trigger
 5) Definition of Done checklist (minimum 10 items, including observability and security)
 
@@ -524,6 +775,7 @@ Style rules:
 - Be concrete and implementation-ready.
 - No fluff.
 - Mention idempotency explicitly.
+- Final output must start with: === FINAL PLAN ===
 
 SPEC:
 {spec}
