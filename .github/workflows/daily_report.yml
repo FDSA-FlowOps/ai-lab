@@ -6,91 +6,77 @@ on:
   workflow_dispatch:
 
 jobs:
-  daily-report:
+  codex:
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
       pull-requests: read
       issues: read
+    outputs:
+      final_message: ${{ steps.run_codex.outputs.final-message }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Prepare Codex config for Azure
+      - name: Build repo context
         shell: bash
         run: |
-          mkdir -p "$HOME/.codex"
-          cat > "$HOME/.codex/config.toml" <<'EOF'
-          model = "gpt-5.3-codex"
-          model_provider = "azure"
-          model_reasoning_effort = "medium"
+          {
+            echo "# Recent commits"
+            git log --since="24 hours ago" --oneline --decorate -n 50 || true
+            echo
+            echo "# Changed files in last 24h"
+            git diff --name-only HEAD~20..HEAD 2>/dev/null || true
+            echo
+            echo "# Open workflows"
+            find .github/workflows -maxdepth 1 -type f | sort || true
+          } > repo-context.txt
 
-          [model_providers.azure]
-          name = "Azure OpenAI"
-          base_url = "https://aleja-mmkilrhf-eastus2.cognitiveservices.azure.com/openai/v1"
-          env_key = "AZURE_OPENAI_API_KEY"
-          wire_api = "responses"
-
-          [analytics]
-          enabled = false
-          EOF
-
-      - name: Build prompt
-        shell: bash
-        run: |
-          mkdir -p .github/codex/prompts
-          cat > .github/codex/prompts/daily-report.md <<'EOF'
-          Eres un asistente técnico que genera un informe diario del repositorio.
-
-          Objetivo:
-          - Revisar la actividad reciente del repo.
-          - Resumir cambios relevantes.
-          - Señalar riesgos, deuda técnica o áreas que necesiten atención.
-          - Proponer 3-5 acciones siguientes concretas.
-
-          Instrucciones:
-          - Usa únicamente la información disponible en el repositorio local.
-          - Mira commits recientes, ficheros modificados, workflows y documentación.
-          - No inventes contexto externo.
-          - Devuelve Markdown limpio con estas secciones:
-
-          # Daily Repo Status Report
-          ## Resumen ejecutivo
-          ## Cambios relevantes
-          ## Riesgos / alertas
-          ## Próximos pasos
-
-          Sé concreto y útil. No añadas relleno.
-          EOF
-
-      - name: Run Codex against Azure
+      - name: Run Codex
         id: run_codex
         uses: openai/codex-action@v1
-        env:
-          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
         with:
           openai-api-key: ${{ secrets.AZURE_OPENAI_API_KEY }}
           responses-api-endpoint: "https://aleja-mmkilrhf-eastus2.cognitiveservices.azure.com/openai/v1/responses"
-          prompt-file: .github/codex/prompts/daily-report.md
-          output-file: daily-report.md
           model: gpt-5.3-codex
           effort: medium
           sandbox: workspace-write
-          safety-strategy: drop-sudo
-          codex-home: /home/runner/.codex
+          output-file: daily-report.md
+          prompt: |
+            You are generating a daily repository status report for ${{ github.repository }}.
 
-      - name: Show report
+            Use the checked-out repository and the file repo-context.txt as your primary context.
+
+            Tasks:
+            1. Summarize the most relevant activity from the last 24 hours.
+            2. Identify important code, workflow, or documentation changes.
+            3. Flag risks, regressions, or areas that need attention.
+            4. Propose 3-5 concrete next steps.
+
+            Constraints:
+            - Be concise but useful.
+            - Do not invent facts not supported by the repository contents.
+            - Output valid Markdown.
+
+            Required structure:
+            # Daily Repo Status Report
+            ## Executive summary
+            ## Relevant changes
+            ## Risks / alerts
+            ## Next steps
+
+  publish_summary:
+    runs-on: ubuntu-latest
+    needs: codex
+    if: needs.codex.outputs.final_message != ''
+    steps:
+      - name: Publish to job summary
         shell: bash
+        env:
+          CODEX_FINAL_MESSAGE: ${{ needs.codex.outputs.final_message }}
         run: |
-          echo "===== DAILY REPORT ====="
-          cat daily-report.md
-
-      - name: Upload report artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: daily-report
-          path: daily-report.md
+          {
+            echo "${CODEX_FINAL_MESSAGE}"
+          } >> "$GITHUB_STEP_SUMMARY"
