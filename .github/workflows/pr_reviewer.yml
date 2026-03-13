@@ -15,22 +15,37 @@ jobs:
       pull-requests: read
     outputs:
       final_message: ${{ steps.run_codex.outputs.final-message }}
+      should_comment: ${{ steps.guard.outputs.should_comment }}
 
     steps:
-      - name: Checkout PR merge commit
+      - name: Guard for forks / missing secret
+        id: guard
+        shell: bash
+        env:
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+        run: |
+          if [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ] && [ -z "$AZURE_OPENAI_API_KEY" ]; then
+            echo "should_comment=false" >> "$GITHUB_OUTPUT"
+            echo "Fork PR without secrets; skipping Codex review."
+          else
+            echo "should_comment=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout PR head commit
+        if: steps.guard.outputs.should_comment == 'true'
         uses: actions/checkout@v5
         with:
-          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
-      - name: Pre-fetch base and head refs
+      - name: Fetch base ref
+        if: steps.guard.outputs.should_comment == 'true'
         shell: bash
         run: |
-          git fetch --no-tags origin \
-            ${{ github.event.pull_request.base.ref }} \
-            +refs/pull/${{ github.event.pull_request.number }}/head
+          git fetch --no-tags origin ${{ github.event.pull_request.base.ref }}
 
       - name: Build review context
+        if: steps.guard.outputs.should_comment == 'true'
         shell: bash
         run: |
           {
@@ -46,11 +61,15 @@ jobs:
             echo "# Changed files"
             git diff --name-status ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} || true
             echo
-            echo "# Unified diff"
-            git diff --unified=3 ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} || true
+            echo "# Unified diff (truncated)"
+            git diff --unified=3 ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} | head -c 120000 || true
+            echo
+            echo
+            echo "[NOTE] Diff truncated to first 120000 bytes if larger."
           } > pr-review-context.txt
 
       - name: Run Codex review
+        if: steps.guard.outputs.should_comment == 'true'
         id: run_codex
         uses: openai/codex-action@v1
         with:
@@ -63,7 +82,7 @@ jobs:
             You are an experienced senior code reviewer.
 
             Review ONLY the changes introduced by this pull request.
-            Use the checked-out repository and the file pr-review-context.txt as the source of truth.
+            Use the checked-out repository and pr-review-context.txt as the source of truth.
 
             Pull request info:
             - Repository: ${{ github.repository }}
@@ -116,7 +135,7 @@ jobs:
   post_feedback:
     runs-on: ubuntu-latest
     needs: codex_review
-    if: needs.codex_review.outputs.final_message != ''
+    if: needs.codex_review.outputs.should_comment == 'true' && needs.codex_review.outputs.final_message != ''
     permissions:
       issues: write
       pull-requests: write
