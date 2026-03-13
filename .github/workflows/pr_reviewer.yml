@@ -18,15 +18,15 @@ jobs:
       should_comment: ${{ steps.guard.outputs.should_comment }}
 
     steps:
-      - name: Guard for forks / missing secret
+      - name: Guard for missing secret
         id: guard
         shell: bash
         env:
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
         run: |
-          if [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ] && [ -z "$AZURE_OPENAI_API_KEY" ]; then
+          if [ -z "$AZURE_OPENAI_API_KEY" ]; then
             echo "should_comment=false" >> "$GITHUB_OUTPUT"
-            echo "Fork PR without secrets; skipping Codex review."
+            echo "Skipping Codex review: missing AZURE_OPENAI_API_KEY."
           else
             echo "should_comment=true" >> "$GITHUB_OUTPUT"
           fi
@@ -48,6 +48,21 @@ jobs:
         if: steps.guard.outputs.should_comment == 'true'
         shell: bash
         run: |
+          MAX_BYTES=120000
+          DIFF_FILE=pr-diff.txt
+
+          git diff --unified=3 \
+            ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} \
+            > full-diff.txt || true
+
+          FULL_SIZE=$(wc -c < full-diff.txt | tr -d ' ')
+          head -c "$MAX_BYTES" full-diff.txt > "$DIFF_FILE"
+
+          TRUNCATED=false
+          if [ "$FULL_SIZE" -gt "$MAX_BYTES" ]; then
+            TRUNCATED=true
+          fi
+
           {
             echo "# PR metadata"
             echo "PR: #${{ github.event.pull_request.number }}"
@@ -61,11 +76,18 @@ jobs:
             echo "# Changed files"
             git diff --name-status ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} || true
             echo
-            echo "# Unified diff (truncated)"
-            git diff --unified=3 ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} | head -c 120000 || true
+            echo "# Diff metadata"
+            echo "Full diff size bytes: $FULL_SIZE"
+            echo "Diff truncated: $TRUNCATED"
+            echo "Max bytes included: $MAX_BYTES"
             echo
-            echo
-            echo "[NOTE] Diff truncated to first 120000 bytes if larger."
+            if [ "$TRUNCATED" = "true" ]; then
+              echo "[WARNING] The diff included below is truncated."
+              echo "[WARNING] Review must be treated as partial coverage."
+              echo
+            fi
+            echo "# Unified diff"
+            cat "$DIFF_FILE"
           } > pr-review-context.txt
 
       - name: Run Codex review
@@ -108,6 +130,7 @@ jobs:
             - Do not invent issues.
             - Ignore minor style nits unless they hide a real engineering problem.
             - Prefer high-signal comments over exhaustive commentary.
+            - If the diff is marked as truncated in pr-review-context.txt, explicitly say the review is partial.
             - If the PR looks good, say so clearly.
 
             Output in Markdown using exactly this structure:
@@ -141,18 +164,44 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: Publish review comment
+      - name: Upsert review comment
         uses: actions/github-script@v7
         env:
           CODEX_FINAL_MESSAGE: ${{ needs.codex_review.outputs.final_message }}
         with:
           github-token: ${{ github.token }}
           script: |
-            const body = `## Codex Review\n\n${process.env.CODEX_FINAL_MESSAGE}`;
+            const marker = "<!-- codex-review-comment -->";
+            const body = `${marker}
 
-            await github.rest.issues.createComment({
+            ## Codex Review
+
+            ${process.env.CODEX_FINAL_MESSAGE}`;
+
+            const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.pull_request.number,
-              body
+              per_page: 100
             });
+
+            const existing = comments.find(comment =>
+              comment.user?.type === "Bot" &&
+              comment.body?.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body
+              });
+            }
