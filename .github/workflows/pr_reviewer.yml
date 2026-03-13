@@ -1,0 +1,226 @@
+name: Codex PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  codex_review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      final_message: ${{ steps.run_codex.outputs.final-message }}
+      should_comment: ${{ steps.guard.outputs.should_comment }}
+
+    steps:
+      - name: Guard for missing secret
+        id: guard
+        shell: bash
+        env:
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+        run: |
+          if [ -z "$AZURE_OPENAI_API_KEY" ]; then
+            echo "should_comment=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping Codex review: missing AZURE_OPENAI_API_KEY."
+          else
+            echo "should_comment=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout PR head commit
+        if: steps.guard.outputs.should_comment == 'true'
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Fetch base ref
+        if: steps.guard.outputs.should_comment == 'true'
+        shell: bash
+        env:
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          git fetch --no-tags origin "$PR_BASE_REF"
+
+      - name: Build review context
+        if: steps.guard.outputs.should_comment == 'true'
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+
+          MAX_BYTES=120000
+          DIFF_FILE=pr-diff.txt
+          FULL_DIFF_FILE=full-diff.txt
+
+          git diff --unified=3 "$PR_BASE_SHA...$PR_HEAD_SHA" > "$FULL_DIFF_FILE" || true
+
+          FULL_SIZE=$(wc -c < "$FULL_DIFF_FILE" | tr -d ' ')
+          head -c "$MAX_BYTES" "$FULL_DIFF_FILE" > "$DIFF_FILE"
+
+          TRUNCATED=false
+          if [ "$FULL_SIZE" -gt "$MAX_BYTES" ]; then
+            TRUNCATED=true
+          fi
+
+          {
+            printf '# PR metadata\n'
+            printf 'PR: #%s\n' "$PR_NUMBER"
+            printf 'Title: %s\n' "$PR_TITLE"
+            printf 'Base: %s (%s)\n' "$PR_BASE_REF" "$PR_BASE_SHA"
+            printf 'Head: %s (%s)\n' "$PR_HEAD_REF" "$PR_HEAD_SHA"
+            printf '\n'
+
+            printf '# Commit list\n'
+            git log --oneline "$PR_BASE_SHA...$PR_HEAD_SHA" || true
+            printf '\n'
+
+            printf '# Changed files\n'
+            git diff --name-status "$PR_BASE_SHA...$PR_HEAD_SHA" || true
+            printf '\n'
+
+            printf '# Diff metadata\n'
+            printf 'Full diff size bytes: %s\n' "$FULL_SIZE"
+            printf 'Diff truncated: %s\n' "$TRUNCATED"
+            printf 'Max bytes included: %s\n' "$MAX_BYTES"
+            printf '\n'
+
+            if [ "$TRUNCATED" = "true" ]; then
+              printf '[WARNING] The diff included below is truncated.\n'
+              printf '[WARNING] Review must be treated as partial coverage.\n'
+              printf '\n'
+            fi
+
+            printf '# Unified diff\n'
+            cat "$DIFF_FILE"
+          } > pr-review-context.txt
+
+      - name: Run Codex review
+        if: steps.guard.outputs.should_comment == 'true'
+        id: run_codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          responses-api-endpoint: "https://aleja-mmkilrhf-eastus2.cognitiveservices.azure.com/openai/v1/responses"
+          model: gpt-5.3-codex
+          effort: medium
+          sandbox: workspace-write
+          prompt: |
+            You are an experienced senior code reviewer.
+
+            Review ONLY the changes introduced by this pull request.
+            Use the checked-out repository and pr-review-context.txt as the source of truth.
+
+            Pull request info:
+            - Repository: ${{ github.repository }}
+            - PR number: ${{ github.event.pull_request.number }}
+            - Title: ${{ github.event.pull_request.title }}
+
+            PR body:
+            ---
+            ${{ github.event.pull_request.body }}
+            ---
+
+            Review criteria:
+            - correctness
+            - regressions
+            - edge cases
+            - security concerns
+            - performance issues
+            - maintainability
+            - test gaps
+
+            Important constraints:
+            - Review only the PR diff, not unrelated repository code.
+            - Do not invent issues.
+            - Ignore minor style nits unless they hide a real engineering problem.
+            - Prefer high-signal comments over exhaustive commentary.
+            - If the diff is marked as truncated in pr-review-context.txt, explicitly say the review is partial.
+            - If the PR looks good, say so clearly.
+
+            Output in Markdown using exactly this structure:
+
+            ## Verdict
+            One short paragraph.
+
+            ## Findings
+            - If there are important issues, list up to 5 bullets.
+            - Each bullet must include:
+              - severity: high | medium | low
+              - file or area affected
+              - concise explanation
+              - suggested fix
+
+            ## Missing tests
+            - List only if relevant.
+
+            ## Summary
+            A short final recommendation:
+            - approve
+            - approve with minor follow-ups
+            - request changes
+
+  post_feedback:
+    runs-on: ubuntu-latest
+    needs: codex_review
+    if: needs.codex_review.outputs.should_comment == 'true' && needs.codex_review.outputs.final_message != ''
+    permissions:
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Upsert review comment
+        uses: actions/github-script@v7
+        env:
+          CODEX_FINAL_MESSAGE: ${{ needs.codex_review.outputs.final_message }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const marker = "<!-- codex-review-comment -->";
+            const body = `${marker}
+
+            ## Codex Review
+
+            ${process.env.CODEX_FINAL_MESSAGE}`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              per_page: 100
+            });
+
+            const existing = comments.find(comment =>
+              comment.user?.type === "Bot" &&
+              comment.body?.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body
+              });
+            }
