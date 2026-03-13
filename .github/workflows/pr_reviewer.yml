@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: codex-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   codex_review:
     runs-on: ubuntu-latest
@@ -41,22 +45,32 @@ jobs:
       - name: Fetch base ref
         if: steps.guard.outputs.should_comment == 'true'
         shell: bash
+        env:
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          git fetch --no-tags origin ${{ github.event.pull_request.base.ref }}
+          git fetch --no-tags origin "$PR_BASE_REF"
 
       - name: Build review context
         if: steps.guard.outputs.should_comment == 'true'
         shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          set -eu
+
           MAX_BYTES=120000
           DIFF_FILE=pr-diff.txt
+          FULL_DIFF_FILE=full-diff.txt
 
-          git diff --unified=3 \
-            ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} \
-            > full-diff.txt || true
+          git diff --unified=3 "$PR_BASE_SHA...$PR_HEAD_SHA" > "$FULL_DIFF_FILE" || true
 
-          FULL_SIZE=$(wc -c < full-diff.txt | tr -d ' ')
-          head -c "$MAX_BYTES" full-diff.txt > "$DIFF_FILE"
+          FULL_SIZE=$(wc -c < "$FULL_DIFF_FILE" | tr -d ' ')
+          head -c "$MAX_BYTES" "$FULL_DIFF_FILE" > "$DIFF_FILE"
 
           TRUNCATED=false
           if [ "$FULL_SIZE" -gt "$MAX_BYTES" ]; then
@@ -64,29 +78,34 @@ jobs:
           fi
 
           {
-            echo "# PR metadata"
-            echo "PR: #${{ github.event.pull_request.number }}"
-            echo "Title: ${{ github.event.pull_request.title }}"
-            echo "Base: ${{ github.event.pull_request.base.ref }} (${{ github.event.pull_request.base.sha }})"
-            echo "Head: ${{ github.event.pull_request.head.ref }} (${{ github.event.pull_request.head.sha }})"
-            echo
-            echo "# Commit list"
-            git log --oneline ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} || true
-            echo
-            echo "# Changed files"
-            git diff --name-status ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} || true
-            echo
-            echo "# Diff metadata"
-            echo "Full diff size bytes: $FULL_SIZE"
-            echo "Diff truncated: $TRUNCATED"
-            echo "Max bytes included: $MAX_BYTES"
-            echo
+            printf '# PR metadata\n'
+            printf 'PR: #%s\n' "$PR_NUMBER"
+            printf 'Title: %s\n' "$PR_TITLE"
+            printf 'Base: %s (%s)\n' "$PR_BASE_REF" "$PR_BASE_SHA"
+            printf 'Head: %s (%s)\n' "$PR_HEAD_REF" "$PR_HEAD_SHA"
+            printf '\n'
+
+            printf '# Commit list\n'
+            git log --oneline "$PR_BASE_SHA...$PR_HEAD_SHA" || true
+            printf '\n'
+
+            printf '# Changed files\n'
+            git diff --name-status "$PR_BASE_SHA...$PR_HEAD_SHA" || true
+            printf '\n'
+
+            printf '# Diff metadata\n'
+            printf 'Full diff size bytes: %s\n' "$FULL_SIZE"
+            printf 'Diff truncated: %s\n' "$TRUNCATED"
+            printf 'Max bytes included: %s\n' "$MAX_BYTES"
+            printf '\n'
+
             if [ "$TRUNCATED" = "true" ]; then
-              echo "[WARNING] The diff included below is truncated."
-              echo "[WARNING] Review must be treated as partial coverage."
-              echo
+              printf '[WARNING] The diff included below is truncated.\n'
+              printf '[WARNING] Review must be treated as partial coverage.\n'
+              printf '\n'
             fi
-            echo "# Unified diff"
+
+            printf '# Unified diff\n'
             cat "$DIFF_FILE"
           } > pr-review-context.txt
 
