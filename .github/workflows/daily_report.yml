@@ -1,0 +1,96 @@
+name: Daily Repo Status Report
+
+on:
+  schedule:
+    - cron: "42 19 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  daily-report:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Prepare Codex config for Azure
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.codex"
+          cat > "$HOME/.codex/config.toml" <<'EOF'
+          model = "gpt-5.3-codex"
+          model_provider = "azure"
+          model_reasoning_effort = "medium"
+
+          [model_providers.azure]
+          name = "Azure OpenAI"
+          base_url = "https://aleja-mmkilrhf-eastus2.cognitiveservices.azure.com/openai/v1"
+          env_key = "AZURE_OPENAI_API_KEY"
+          wire_api = "responses"
+
+          [analytics]
+          enabled = false
+          EOF
+
+      - name: Build prompt
+        shell: bash
+        run: |
+          mkdir -p .github/codex/prompts
+          cat > .github/codex/prompts/daily-report.md <<'EOF'
+          Eres un asistente técnico que genera un informe diario del repositorio.
+
+          Objetivo:
+          - Revisar la actividad reciente del repo.
+          - Resumir cambios relevantes.
+          - Señalar riesgos, deuda técnica o áreas que necesiten atención.
+          - Proponer 3-5 acciones siguientes concretas.
+
+          Instrucciones:
+          - Usa únicamente la información disponible en el repositorio local.
+          - Mira commits recientes, ficheros modificados, workflows y documentación.
+          - No inventes contexto externo.
+          - Devuelve Markdown limpio con estas secciones:
+
+          # Daily Repo Status Report
+          ## Resumen ejecutivo
+          ## Cambios relevantes
+          ## Riesgos / alertas
+          ## Próximos pasos
+
+          Sé concreto y útil. No añadas relleno.
+          EOF
+
+      - name: Run Codex against Azure
+        id: run_codex
+        uses: openai/codex-action@v1
+        env:
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+        with:
+          openai-api-key: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          responses-api-endpoint: "https://aleja-mmkilrhf-eastus2.cognitiveservices.azure.com/openai/v1/responses"
+          prompt-file: .github/codex/prompts/daily-report.md
+          output-file: daily-report.md
+          model: gpt-5.3-codex
+          effort: medium
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+          codex-home: /home/runner/.codex
+
+      - name: Show report
+        shell: bash
+        run: |
+          echo "===== DAILY REPORT ====="
+          cat daily-report.md
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-report
+          path: daily-report.md
