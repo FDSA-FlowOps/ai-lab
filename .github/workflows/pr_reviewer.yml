@@ -1,0 +1,139 @@
+name: Codex PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  codex_review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      final_message: ${{ steps.run_codex.outputs.final-message }}
+
+    steps:
+      - name: Checkout PR merge commit
+        uses: actions/checkout@v5
+        with:
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+          fetch-depth: 0
+
+      - name: Pre-fetch base and head refs
+        shell: bash
+        run: |
+          git fetch --no-tags origin \
+            ${{ github.event.pull_request.base.ref }} \
+            +refs/pull/${{ github.event.pull_request.number }}/head
+
+      - name: Build review context
+        shell: bash
+        run: |
+          {
+            echo "# PR metadata"
+            echo "PR: #${{ github.event.pull_request.number }}"
+            echo "Title: ${{ github.event.pull_request.title }}"
+            echo "Base: ${{ github.event.pull_request.base.ref }} (${{ github.event.pull_request.base.sha }})"
+            echo "Head: ${{ github.event.pull_request.head.ref }} (${{ github.event.pull_request.head.sha }})"
+            echo
+            echo "# Commit list"
+            git log --oneline ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} || true
+            echo
+            echo "# Changed files"
+            git diff --name-status ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} || true
+            echo
+            echo "# Unified diff"
+            git diff --unified=3 ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} || true
+          } > pr-review-context.txt
+
+      - name: Run Codex review
+        id: run_codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          responses-api-endpoint: "https://aleja-mmkilrhf-eastus2.cognitiveservices.azure.com/openai/v1/responses"
+          model: gpt-5.3-codex
+          effort: medium
+          sandbox: workspace-write
+          prompt: |
+            You are an experienced senior code reviewer.
+
+            Review ONLY the changes introduced by this pull request.
+            Use the checked-out repository and the file pr-review-context.txt as the source of truth.
+
+            Pull request info:
+            - Repository: ${{ github.repository }}
+            - PR number: ${{ github.event.pull_request.number }}
+            - Title: ${{ github.event.pull_request.title }}
+
+            PR body:
+            ---
+            ${{ github.event.pull_request.body }}
+            ---
+
+            Review criteria:
+            - correctness
+            - regressions
+            - edge cases
+            - security concerns
+            - performance issues
+            - maintainability
+            - test gaps
+
+            Important constraints:
+            - Review only the PR diff, not unrelated repository code.
+            - Do not invent issues.
+            - Ignore minor style nits unless they hide a real engineering problem.
+            - Prefer high-signal comments over exhaustive commentary.
+            - If the PR looks good, say so clearly.
+
+            Output in Markdown using exactly this structure:
+
+            ## Verdict
+            One short paragraph.
+
+            ## Findings
+            - If there are important issues, list up to 5 bullets.
+            - Each bullet must include:
+              - severity: high | medium | low
+              - file or area affected
+              - concise explanation
+              - suggested fix
+
+            ## Missing tests
+            - List only if relevant.
+
+            ## Summary
+            A short final recommendation:
+            - approve
+            - approve with minor follow-ups
+            - request changes
+
+  post_feedback:
+    runs-on: ubuntu-latest
+    needs: codex_review
+    if: needs.codex_review.outputs.final_message != ''
+    permissions:
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Publish review comment
+        uses: actions/github-script@v7
+        env:
+          CODEX_FINAL_MESSAGE: ${{ needs.codex_review.outputs.final_message }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const body = `## Codex Review\n\n${process.env.CODEX_FINAL_MESSAGE}`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body
+            });
