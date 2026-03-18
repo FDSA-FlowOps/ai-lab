@@ -1,0 +1,13 @@
+name: Test Doc Agent
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  document:
+    uses: FDSA-FlowOps/doc-agent/.github/workflows/document-pr.yml@main
+    with:
+      doc_mode: "pr-summary"
+    secrets:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
