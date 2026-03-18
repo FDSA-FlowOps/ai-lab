@@ -1,0 +1,19 @@
+name: Test Doc Agent
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  document:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    uses: FDSA-FlowOps/doc-agent/.github/workflows/document-pr.yml@98e242f735bc538470766d14af10a0cbde47957d
+    with:
+      doc_mode: "pr-summary"
+    secrets:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
