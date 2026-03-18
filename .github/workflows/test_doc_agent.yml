@@ -6,7 +6,7 @@ on:
 
 jobs:
   document:
-    uses: FDSA-FlowOps/doc-agent/.github/workflows/document-pr.yml@main
+    uses: FDSA-FlowOps/doc-agent/.github/workflows/document-pr.yml@98e242f
     with:
       doc_mode: "pr-summary"
     secrets:
