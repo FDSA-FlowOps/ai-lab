@@ -36,34 +36,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Checkout external agent catalog with token
-        if: steps.guard.outputs.should_publish == 'true' && vars.AGENT_CATALOG_REPOSITORY != '' && secrets.AGENT_CATALOG_REPO_TOKEN != ''
-        uses: actions/checkout@v5
-        with:
-          repository: ${{ vars.AGENT_CATALOG_REPOSITORY }}
-          path: external-agent-catalog
-          fetch-depth: 1
-          token: ${{ secrets.AGENT_CATALOG_REPO_TOKEN }}
-
-      - name: Checkout external agent catalog without token
-        if: steps.guard.outputs.should_publish == 'true' && vars.AGENT_CATALOG_REPOSITORY != '' && secrets.AGENT_CATALOG_REPO_TOKEN == ''
-        uses: actions/checkout@v5
-        with:
-          repository: ${{ vars.AGENT_CATALOG_REPOSITORY }}
-          path: external-agent-catalog
-          fetch-depth: 1
-
-      - name: Resolve agent catalog path
-        if: steps.guard.outputs.should_publish == 'true'
-        id: catalog
-        shell: bash
-        run: |
-          if [ -f external-agent-catalog/catalog.json ]; then
-            echo "path=external-agent-catalog/catalog.json" >> "$GITHUB_OUTPUT"
-          else
-            echo "path=.github/agent-catalog/catalog.json" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Build commit context
         if: steps.guard.outputs.should_publish == 'true'
         shell: bash
@@ -78,7 +50,7 @@ jobs:
       - name: Select agents
         if: steps.guard.outputs.should_publish == 'true'
         shell: bash
-        run: node .github/scripts/select-agents.js changed-files.txt "${{ steps.catalog.outputs.path }}"
+        run: node .github/scripts/select-agents.js changed-files.txt .github/agent-catalog/catalog.json
 
       - name: Run Codex analyzer
         if: steps.guard.outputs.should_publish == 'true'
