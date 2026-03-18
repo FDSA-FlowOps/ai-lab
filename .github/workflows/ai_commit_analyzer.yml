@@ -1,0 +1,147 @@
+name: AI Commit Analyzer
+
+on:
+  push:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+jobs:
+  analyze_commit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      final_message: ${{ steps.run_codex.outputs.final-message }}
+      should_publish: ${{ steps.guard.outputs.should_publish }}
+
+    steps:
+      - name: Guard for missing secret
+        id: guard
+        shell: bash
+        env:
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+        run: |
+          if [ -z "$AZURE_OPENAI_API_KEY" ]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping AI Commit Analyzer: missing AZURE_OPENAI_API_KEY."
+          else
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout repository
+        if: steps.guard.outputs.should_publish == 'true'
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Checkout external agent catalog with token
+        if: steps.guard.outputs.should_publish == 'true' && vars.AGENT_CATALOG_REPOSITORY != '' && secrets.AGENT_CATALOG_REPO_TOKEN != ''
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ vars.AGENT_CATALOG_REPOSITORY }}
+          path: external-agent-catalog
+          fetch-depth: 1
+          token: ${{ secrets.AGENT_CATALOG_REPO_TOKEN }}
+
+      - name: Checkout external agent catalog without token
+        if: steps.guard.outputs.should_publish == 'true' && vars.AGENT_CATALOG_REPOSITORY != '' && secrets.AGENT_CATALOG_REPO_TOKEN == ''
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ vars.AGENT_CATALOG_REPOSITORY }}
+          path: external-agent-catalog
+          fetch-depth: 1
+
+      - name: Resolve agent catalog path
+        if: steps.guard.outputs.should_publish == 'true'
+        id: catalog
+        shell: bash
+        run: |
+          if [ -f external-agent-catalog/catalog.json ]; then
+            echo "path=external-agent-catalog/catalog.json" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=.github/agent-catalog/catalog.json" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build commit context
+        if: steps.guard.outputs.should_publish == 'true'
+        shell: bash
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: bash .github/scripts/build-commit-context.sh
+
+      - name: Select agents
+        if: steps.guard.outputs.should_publish == 'true'
+        shell: bash
+        run: node .github/scripts/select-agents.js changed-files.txt "${{ steps.catalog.outputs.path }}"
+
+      - name: Run Codex analyzer
+        if: steps.guard.outputs.should_publish == 'true'
+        id: run_codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          responses-api-endpoint: "https://aleja-mmkilrhf-eastus2.cognitiveservices.azure.com/openai/v1/responses"
+          model: gpt-5.3-codex
+          effort: medium
+          sandbox: workspace-write
+          output-file: commit-analysis.md
+          prompt: |
+            Follow the instructions in `.github/prompts/commit-analyzer.md`.
+
+            Source of truth files:
+            - `commit-context.txt`
+            - `changed-files.txt`
+            - `selected-agents.json`
+            - `selected-agents.md`
+
+            Repository:
+            - `${{ github.repository }}`
+
+            Constraints:
+            - Use only the checked-out repository and the generated files above.
+            - Do not invent facts not supported by the repository contents.
+            - If the diff was truncated, say clearly that the analysis is partial.
+            - Output valid Markdown only.
+
+      - name: Extract changelog entry
+        if: steps.guard.outputs.should_publish == 'true'
+        shell: bash
+        run: |
+          awk '
+            /^## Changelog Entry$/ { capture=1; next }
+            /^## / && capture { exit }
+            capture { print }
+          ' commit-analysis.md > changelog-entry.md
+
+      - name: Upload analyzer artifacts
+        if: steps.guard.outputs.should_publish == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-commit-analyzer
+          path: |
+            commit-context.txt
+            changed-files.txt
+            selected-agents.json
+            selected-agents.md
+            commit-analysis.md
+            changelog-entry.md
+
+  publish_summary:
+    runs-on: ubuntu-latest
+    needs: analyze_commit
+    if: needs.analyze_commit.outputs.should_publish == 'true' && needs.analyze_commit.outputs.final_message != ''
+    steps:
+      - name: Publish to job summary
+        shell: bash
+        env:
+          CODEX_FINAL_MESSAGE: ${{ needs.analyze_commit.outputs.final_message }}
+        run: |
+          {
+            echo "${CODEX_FINAL_MESSAGE}"
+          } >> "$GITHUB_STEP_SUMMARY"

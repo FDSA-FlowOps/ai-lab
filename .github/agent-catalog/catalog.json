@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "agents": [
+    {
+      "id": "workflow-agent",
+      "description": "Reviews GitHub Actions and repository automation changes.",
+      "match": [
+        ".github/workflows/**",
+        ".github/scripts/**"
+      ],
+      "priority": 90
+    },
+    {
+      "id": "dotnet-agent",
+      "description": "Reviews .NET and C# code changes.",
+      "match": [
+        "**/*.cs",
+        "**/*.csproj",
+        "**/*.sln"
+      ],
+      "priority": 80
+    },
+    {
+      "id": "agent-api",
+      "description": "Reviews backend API contracts, endpoints and application services.",
+      "match": [
+        "**/api/**",
+        "**/Api/**",
+        "**/Controllers/**",
+        "**/Endpoints/**",
+        "**/*.http"
+      ],
+      "priority": 70
+    },
+    {
+      "id": "rag-agent",
+      "description": "Reviews RAG experiments, retrieval logic and vector workflows.",
+      "match": [
+        "RAG/**"
+      ],
+      "priority": 60
+    },
+    {
+      "id": "mcp-agent",
+      "description": "Reviews MCP servers, tools and WebMCP assets.",
+      "match": [
+        "MCP/**",
+        "WebMCP/**"
+      ],
+      "priority": 60
+    }
+  ]
+}
