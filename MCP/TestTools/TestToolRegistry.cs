@@ -4,6 +4,6 @@ public static class TestToolRegistry
 {
     public static string[] GetTools()
     {
-        return ["search", "review"];
+        return ["search", "review", "summarize"];
     }
 }
