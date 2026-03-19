@@ -12,4 +12,9 @@ public static class TestToolRegistry
         ArgumentException.ThrowIfNullOrWhiteSpace(toolName);
         return GetTools().Contains(toolName, StringComparer.OrdinalIgnoreCase);
     }
+
+    public static string DescribeToolset()
+    {
+        return string.Join(", ", GetTools().OrderBy(tool => tool, StringComparer.OrdinalIgnoreCase));
+    }
 }

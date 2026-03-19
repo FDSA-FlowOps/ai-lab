@@ -66,7 +66,7 @@ Si quieres cambiar el estilo de salida:
 
 ## Como usar `pull_request_reviewer`
 ### Proposito
-Analiza la PR, propone una descripcion basada en plantilla y publica un resumen de revision.
+Analiza la PR, propone una descripcion basada en plantilla, etiqueta la PR y publica un resumen de revision.
 
 ### Disparador
 - `pull_request` en `opened`, `synchronize`, `reopened`
@@ -77,8 +77,11 @@ Analiza la PR, propone una descripcion basada en plantilla y publica un resumen 
 3. Calcula agentes candidatos a partir del catalogo y las reglas.
 4. Ejecuta el analisis con IA.
 5. Extrae la descripcion propuesta de la PR.
-6. Actualiza el cuerpo de la PR dentro de un bloque gestionado.
-7. Publica el resumen en `GITHUB_STEP_SUMMARY`.
+6. Extrae etiquetas sugeridas y un comentario de revision.
+7. Actualiza el cuerpo de la PR dentro de un bloque gestionado.
+8. Crea las etiquetas si no existen y las aplica a la PR.
+9. Publica o actualiza un comentario de revision general.
+10. Publica el resumen en `GITHUB_STEP_SUMMARY`.
 
 ### Salidas
 - `pr-review.md`
@@ -86,6 +89,8 @@ Analiza la PR, propone una descripcion basada en plantilla y publica un resumen 
 - `selected-agents.json`
 - `selected-agents.md`
 - `change-metrics.json`
+- `pr-labels.txt`
+- `pr-review-comment.md`
 - artefacto `pull-request-reviewer`
 
 ### Como se actualiza la descripcion de la PR
@@ -100,6 +105,20 @@ El workflow inserta o actualiza un bloque gestionado entre estos marcadores:
 Esto permite:
 - regenerar la descripcion sin destruir el resto del cuerpo
 - mantener una zona controlada por automatizacion
+
+### Etiquetado de la PR
+El reviewer propone etiquetas basadas en:
+- tipo de cambio alineado con conventional commits, por ejemplo `feat`, `fix`, `refactor`
+- area afectada, por ejemplo `area:dotnet`, `area:mcp`, `area:automation`
+
+Si la etiqueta no existe en el repositorio, el workflow la crea antes de aplicarla.
+
+### Comentario de revision
+El workflow publica un comentario general de revision y lo mantiene actualizado usando un marcador interno.
+
+Esto permite:
+- no duplicar comentarios en cada sincronizacion de la PR
+- mantener una unica revision automatizada visible
 
 ## Como usar `daily_report`
 ### Proposito

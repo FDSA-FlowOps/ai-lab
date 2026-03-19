@@ -16,12 +16,19 @@ public sealed class ReviewService
     public string BuildSummary(AgentRunOptions options)
     {
         return CanReview(options)
-            ? $"review-enabled:{options.Mode}"
+            ? $"review-enabled:{NormalizeMode(options.Mode)}"
             : "review-blocked";
     }
 
     public bool IsReady()
     {
         return true;
+    }
+
+    private static string NormalizeMode(string? mode)
+    {
+        return string.IsNullOrWhiteSpace(mode)
+            ? "standard"
+            : mode.Trim().ToLowerInvariant();
     }
 }

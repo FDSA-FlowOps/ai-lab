@@ -4,6 +4,14 @@ public sealed class AgentRunner
 {
     public string Name => "test-agent";
 
+    public string RunDetailed(AgentRunOptions options)
+    {
+        var result = Run(options);
+        return options.IncludeDiagnostics
+            ? $"{result}:diagnostics-enabled"
+            : result;
+    }
+
     public string Run(AgentRunOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
