@@ -1,4 +1,4 @@
-name: Test GitHub Models
+name: Ejemplo Opcional de GitHub Models
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ jobs:
   test-model:
     runs-on: ubuntu-latest
     steps:
-      - name: Call GPT-4.1
+      - name: Llamar a GPT-4.1 mediante GitHub Models
         run: |
           curl https://models.github.ai/orgs/FDSA-FlowOps/inference/chat/completions \
             -H "Authorization: Bearer ${{ secrets.PAT_MODELS_TOKEN }}" \
