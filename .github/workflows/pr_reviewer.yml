@@ -1,4 +1,4 @@
-name: Codex PR Review
+name: Revisor de Pull Requests
 
 on:
   pull_request:
@@ -8,109 +8,56 @@ permissions:
   contents: read
 
 concurrency:
-  group: codex-review-${{ github.event.pull_request.number }}
+  group: pr-reviewer-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  codex_review:
+  review_pull_request:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
     outputs:
       final_message: ${{ steps.run_codex.outputs.final-message }}
-      should_comment: ${{ steps.guard.outputs.should_comment }}
+      should_publish: ${{ steps.guard.outputs.should_publish }}
 
     steps:
-      - name: Guard for missing secret
+      - name: Validar secreto requerido
         id: guard
         shell: bash
         env:
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
         run: |
           if [ -z "$AZURE_OPENAI_API_KEY" ]; then
-            echo "should_comment=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping Codex review: missing AZURE_OPENAI_API_KEY."
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "Omitiendo Pull Request Reviewer: falta AZURE_OPENAI_API_KEY."
           else
-            echo "should_comment=true" >> "$GITHUB_OUTPUT"
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout PR head commit
-        if: steps.guard.outputs.should_comment == 'true'
+      - name: Descargar repositorio
+        if: steps.guard.outputs.should_publish == 'true'
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
-      - name: Fetch base ref
-        if: steps.guard.outputs.should_comment == 'true'
+      - name: Construir contexto de la PR
+        if: steps.guard.outputs.should_publish == 'true'
         shell: bash
         env:
-          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-        run: |
-          git fetch --no-tags origin "$PR_BASE_REF"
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash .github/scripts/build-pr-context.sh
 
-      - name: Build review context
-        if: steps.guard.outputs.should_comment == 'true'
+      - name: Seleccionar agentes
+        if: steps.guard.outputs.should_publish == 'true'
         shell: bash
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -eu
+        run: node .github/scripts/select-agents.js pr-changed-files.txt .github/agent-catalog/catalog.json
 
-          MAX_BYTES=120000
-          DIFF_FILE=pr-diff.txt
-          FULL_DIFF_FILE=full-diff.txt
-
-          git diff --unified=3 "$PR_BASE_SHA...$PR_HEAD_SHA" > "$FULL_DIFF_FILE" || true
-
-          FULL_SIZE=$(wc -c < "$FULL_DIFF_FILE" | tr -d ' ')
-          head -c "$MAX_BYTES" "$FULL_DIFF_FILE" > "$DIFF_FILE"
-
-          TRUNCATED=false
-          if [ "$FULL_SIZE" -gt "$MAX_BYTES" ]; then
-            TRUNCATED=true
-          fi
-
-          {
-            printf '# PR metadata\n'
-            printf 'PR: #%s\n' "$PR_NUMBER"
-            printf 'Title: %s\n' "$PR_TITLE"
-            printf 'Base: %s (%s)\n' "$PR_BASE_REF" "$PR_BASE_SHA"
-            printf 'Head: %s (%s)\n' "$PR_HEAD_REF" "$PR_HEAD_SHA"
-            printf '\n'
-
-            printf '# Commit list\n'
-            git log --oneline "$PR_BASE_SHA...$PR_HEAD_SHA" || true
-            printf '\n'
-
-            printf '# Changed files\n'
-            git diff --name-status "$PR_BASE_SHA...$PR_HEAD_SHA" || true
-            printf '\n'
-
-            printf '# Diff metadata\n'
-            printf 'Full diff size bytes: %s\n' "$FULL_SIZE"
-            printf 'Diff truncated: %s\n' "$TRUNCATED"
-            printf 'Max bytes included: %s\n' "$MAX_BYTES"
-            printf '\n'
-
-            if [ "$TRUNCATED" = "true" ]; then
-              printf '[WARNING] The diff included below is truncated.\n'
-              printf '[WARNING] Review must be treated as partial coverage.\n'
-              printf '\n'
-            fi
-
-            printf '# Unified diff\n'
-            cat "$DIFF_FILE"
-          } > pr-review-context.txt
-
-      - name: Run Codex review
-        if: steps.guard.outputs.should_comment == 'true'
+      - name: Ejecutar analisis de la PR
+        if: steps.guard.outputs.should_publish == 'true'
         id: run_codex
         uses: openai/codex-action@v1
         with:
@@ -119,108 +66,106 @@ jobs:
           model: gpt-5.3-codex
           effort: medium
           sandbox: workspace-write
+          output-file: pr-review.md
           prompt: |
-            You are an experienced senior code reviewer.
+            Sigue las instrucciones de `.github/prompts/pull-request-reviewer.md`.
 
-            Review ONLY the changes introduced by this pull request.
-            Use the checked-out repository and pr-review-context.txt as the source of truth.
+            Ficheros fuente de verdad:
+            - `pr-context.txt`
+            - `pr-changed-files.txt`
+            - `selected-agents.json`
+            - `selected-agents.md`
 
-            Pull request info:
-            - Repository: ${{ github.repository }}
-            - PR number: ${{ github.event.pull_request.number }}
-            - Title: ${{ github.event.pull_request.title }}
+            Repositorio:
+            - `${{ github.repository }}`
 
-            PR body:
-            ---
-            ${{ github.event.pull_request.body }}
-            ---
+            Restricciones:
+            - Usa solo el repositorio descargado y los ficheros generados.
+            - No inventes hechos no soportados por el contenido del repositorio.
+            - Si el diff fue truncado, indica claramente que el analisis es parcial.
+            - Devuelve solo Markdown valido.
 
-            Review criteria:
-            - correctness
-            - regressions
-            - edge cases
-            - security concerns
-            - performance issues
-            - maintainability
-            - test gaps
+      - name: Extraer descripcion propuesta de la PR
+        if: steps.guard.outputs.should_publish == 'true'
+        shell: bash
+        run: |
+          awk '
+            /^## Descripcion propuesta de la PR$/ { capture=1; next }
+            /^## / && capture { exit }
+            capture { print }
+          ' pr-review.md > pr-body-generated.md
 
-            Important constraints:
-            - Review only the PR diff, not unrelated repository code.
-            - Do not invent issues.
-            - Ignore minor style nits unless they hide a real engineering problem.
-            - Prefer high-signal comments over exhaustive commentary.
-            - If the diff is marked as truncated in pr-review-context.txt, explicitly say the review is partial.
-            - If the PR looks good, say so clearly.
+      - name: Subir artefactos del revisor
+        if: steps.guard.outputs.should_publish == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pull-request-reviewer
+          path: |
+            pr-context.txt
+            pr-changed-files.txt
+            change-metrics.json
+            change-numstat.txt
+            selected-agents.json
+            selected-agents.md
+            pr-review.md
+            pr-body-generated.md
 
-            Output in Markdown using exactly this structure:
-
-            ## Verdict
-            One short paragraph.
-
-            ## Findings
-            - If there are important issues, list up to 5 bullets.
-            - Each bullet must include:
-              - severity: high | medium | low
-              - file or area affected
-              - concise explanation
-              - suggested fix
-
-            ## Missing tests
-            - List only if relevant.
-
-            ## Summary
-            A short final recommendation:
-            - approve
-            - approve with minor follow-ups
-            - request changes
-
-  post_feedback:
+  update_pull_request_body:
     runs-on: ubuntu-latest
-    needs: codex_review
-    if: needs.codex_review.outputs.should_comment == 'true' && needs.codex_review.outputs.final_message != ''
+    needs: review_pull_request
+    if: github.event_name == 'pull_request' && needs.review_pull_request.outputs.should_publish == 'true'
     permissions:
-      issues: write
       pull-requests: write
-
+      contents: read
     steps:
-      - name: Upsert review comment
+      - name: Descargar repositorio
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Descargar artefactos del revisor
+        uses: actions/download-artifact@v4
+        with:
+          name: pull-request-reviewer
+
+      - name: Actualizar descripcion de la PR
         uses: actions/github-script@v7
-        env:
-          CODEX_FINAL_MESSAGE: ${{ needs.codex_review.outputs.final_message }}
         with:
           github-token: ${{ github.token }}
           script: |
-            const marker = "<!-- codex-review-comment -->";
-            const body = `${marker}
+            const fs = require('fs');
+            const markerStart = '<!-- ai-pr-reviewer:start -->';
+            const markerEnd = '<!-- ai-pr-reviewer:end -->';
+            const generated = fs.readFileSync('pr-body-generated.md', 'utf8').trim();
+            const currentBody = context.payload.pull_request.body || '';
+            const managedBlock = `${markerStart}\n${generated}\n${markerEnd}`;
 
-            ## Codex Review
+            let nextBody = currentBody.trim();
+            if (nextBody.includes(markerStart) && nextBody.includes(markerEnd)) {
+              nextBody = nextBody.replace(new RegExp(`${markerStart}[\\s\\S]*?${markerEnd}`), managedBlock);
+            } else if (nextBody.length === 0) {
+              nextBody = managedBlock;
+            } else {
+              nextBody = `${managedBlock}\n\n${nextBody}`;
+            }
 
-            ${process.env.CODEX_FINAL_MESSAGE}`;
-
-            const { data: comments } = await github.rest.issues.listComments({
+            await github.rest.pulls.update({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              per_page: 100
+              pull_number: context.payload.pull_request.number,
+              body: nextBody
             });
 
-            const existing = comments.find(comment =>
-              comment.user?.type === "Bot" &&
-              comment.body?.includes(marker)
-            );
-
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.payload.pull_request.number,
-                body
-              });
-            }
+  publish_summary:
+    runs-on: ubuntu-latest
+    needs: review_pull_request
+    if: needs.review_pull_request.outputs.should_publish == 'true' && needs.review_pull_request.outputs.final_message != ''
+    steps:
+      - name: Publicar en el resumen del job
+        shell: bash
+        env:
+          CODEX_FINAL_MESSAGE: ${{ needs.review_pull_request.outputs.final_message }}
+        run: |
+          {
+            echo "${CODEX_FINAL_MESSAGE}"
+          } >> "$GITHUB_STEP_SUMMARY"

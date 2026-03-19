@@ -6,4 +6,10 @@ public static class TestToolRegistry
     {
         return ["search", "review", "summarize"];
     }
+
+    public static bool Supports(string toolName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(toolName);
+        return GetTools().Contains(toolName, StringComparer.OrdinalIgnoreCase);
+    }
 }

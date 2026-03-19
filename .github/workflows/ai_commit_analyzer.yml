@@ -1,9 +1,7 @@
-name: AI Commit Analyzer
+name: Analizador de Commits
 
 on:
   push:
-  pull_request:
-    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 jobs:
@@ -11,13 +9,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
     outputs:
       final_message: ${{ steps.run_codex.outputs.final-message }}
       should_publish: ${{ steps.guard.outputs.should_publish }}
 
     steps:
-      - name: Guard for missing secret
+      - name: Validar secreto requerido
         id: guard
         shell: bash
         env:
@@ -25,18 +22,18 @@ jobs:
         run: |
           if [ -z "$AZURE_OPENAI_API_KEY" ]; then
             echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping AI Commit Analyzer: missing AZURE_OPENAI_API_KEY."
+            echo "Omitiendo Commit Analyzer: falta AZURE_OPENAI_API_KEY."
           else
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout repository
+      - name: Descargar repositorio
         if: steps.guard.outputs.should_publish == 'true'
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Build commit context
+      - name: Construir contexto del commit
         if: steps.guard.outputs.should_publish == 'true'
         shell: bash
         env:
@@ -47,12 +44,7 @@ jobs:
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: bash .github/scripts/build-commit-context.sh
 
-      - name: Select agents
-        if: steps.guard.outputs.should_publish == 'true'
-        shell: bash
-        run: node .github/scripts/select-agents.js changed-files.txt .github/agent-catalog/catalog.json
-
-      - name: Run Codex analyzer
+      - name: Ejecutar analisis del commit
         if: steps.guard.outputs.should_publish == 'true'
         id: run_codex
         uses: openai/codex-action@v1
@@ -64,43 +56,39 @@ jobs:
           sandbox: workspace-write
           output-file: commit-analysis.md
           prompt: |
-            Follow the instructions in `.github/prompts/commit-analyzer.md`.
+            Sigue las instrucciones de `.github/prompts/commit-analyzer.md`.
 
-            Source of truth files:
+            Ficheros fuente de verdad:
             - `commit-context.txt`
-            - `changed-files.txt`
-            - `selected-agents.json`
-            - `selected-agents.md`
 
-            Repository:
+            Repositorio:
             - `${{ github.repository }}`
 
-            Constraints:
-            - Use only the checked-out repository and the generated files above.
-            - Do not invent facts not supported by the repository contents.
-            - If the diff was truncated, say clearly that the analysis is partial.
-            - Output valid Markdown only.
+            Restricciones:
+            - Usa solo el repositorio descargado y los ficheros generados.
+            - No inventes hechos no soportados por el contenido del repositorio.
+            - Si el diff fue truncado, indica claramente que el analisis es parcial.
+            - Devuelve solo Markdown valido.
 
-      - name: Extract changelog entry
+      - name: Extraer entrada de changelog
         if: steps.guard.outputs.should_publish == 'true'
         shell: bash
         run: |
           awk '
-            /^## Changelog Entry$/ { capture=1; next }
+            /^## Entrada de changelog$/ { capture=1; next }
             /^## / && capture { exit }
             capture { print }
           ' commit-analysis.md > changelog-entry.md
 
-      - name: Upload analyzer artifacts
+      - name: Subir artefactos del analizador
         if: steps.guard.outputs.should_publish == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ai-commit-analyzer
+          name: commit-analyzer
           path: |
             commit-context.txt
-            changed-files.txt
-            selected-agents.json
-            selected-agents.md
+            change-metrics.json
+            change-numstat.txt
             commit-analysis.md
             changelog-entry.md
 
@@ -109,7 +97,7 @@ jobs:
     needs: analyze_commit
     if: needs.analyze_commit.outputs.should_publish == 'true' && needs.analyze_commit.outputs.final_message != ''
     steps:
-      - name: Publish to job summary
+      - name: Publicar en el resumen del job
         shell: bash
         env:
           CODEX_FINAL_MESSAGE: ${{ needs.analyze_commit.outputs.final_message }}
