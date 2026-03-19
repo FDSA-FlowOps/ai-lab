@@ -12,7 +12,7 @@ permissions:
 jobs:
   document:
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-    uses: FDSA-FlowOps/doc-agent/.github/workflows/document-pr.yml@bd59f26c4573bf18b4cd5da76f4c6de4aca80498
+    uses: FDSA-FlowOps/doc-agent/.github/workflows/document-pr.yml@9cc3866a6ea28ea443b24f593d3f35bdda6c0b40
     with:
       doc_mode: "pr-summary"
     secrets:
