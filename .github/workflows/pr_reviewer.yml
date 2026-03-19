@@ -14,15 +14,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  review_pull_request:
+  prepare_pr_context:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
     outputs:
-      final_message: ${{ steps.run_codex.outputs.final-message }}
-      should_publish: ${{ steps.guard.outputs.should_publish }}
-
+      should_run: ${{ steps.guard.outputs.should_run }}
     steps:
       - name: Validar secreto requerido
         id: guard
@@ -31,100 +29,37 @@ jobs:
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
         run: |
           if [ -z "$AZURE_OPENAI_API_KEY" ]; then
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
             echo "Omitiendo Pull Request Reviewer: falta AZURE_OPENAI_API_KEY."
           else
-            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Descargar repositorio
-        if: steps.guard.outputs.should_publish == 'true'
+        if: steps.guard.outputs.should_run == 'true'
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
       - name: Construir contexto de la PR
-        if: steps.guard.outputs.should_publish == 'true'
+        if: steps.guard.outputs.should_run == 'true'
         shell: bash
         env:
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: bash .github/scripts/build-pr-context.sh
 
       - name: Seleccionar agentes
-        if: steps.guard.outputs.should_publish == 'true'
+        if: steps.guard.outputs.should_run == 'true'
         shell: bash
         run: node .github/scripts/select-agents.js pr-changed-files.txt .github/agent-catalog/catalog.json
 
-      - name: Ejecutar analisis de la PR
-        if: steps.guard.outputs.should_publish == 'true'
-        id: run_codex
-        uses: openai/codex-action@v1
-        with:
-          openai-api-key: ${{ secrets.AZURE_OPENAI_API_KEY }}
-          responses-api-endpoint: "https://aleja-mmkilrhf-eastus2.cognitiveservices.azure.com/openai/v1/responses"
-          model: gpt-5.3-codex
-          effort: medium
-          sandbox: workspace-write
-          output-file: pr-review.md
-          prompt: |
-            Sigue las instrucciones de `.github/prompts/pull-request-reviewer.md`.
-
-            Ficheros fuente de verdad:
-            - `pr-context.txt`
-            - `pr-changed-files.txt`
-            - `selected-agents.json`
-            - `selected-agents.md`
-
-            Repositorio:
-            - `${{ github.repository }}`
-
-            Restricciones:
-            - Usa solo el repositorio descargado y los ficheros generados.
-            - No inventes hechos no soportados por el contenido del repositorio.
-            - Si el diff fue truncado, indica claramente que el analisis es parcial.
-            - Devuelve solo Markdown valido.
-
-      - name: Extraer descripcion propuesta de la PR
-        if: steps.guard.outputs.should_publish == 'true'
-        shell: bash
-        run: |
-          awk '
-            /^## Descripcion propuesta de la PR$/ { capture=1; next }
-            /^## / && capture { exit }
-            capture { print }
-          ' pr-review.md > pr-body-generated.md
-
-      - name: Extraer etiquetas sugeridas
-        if: steps.guard.outputs.should_publish == 'true'
-        shell: bash
-        run: |
-          awk '
-            /^## Etiquetas sugeridas$/ { capture=1; next }
-            /^## / && capture { exit }
-            capture { print }
-          ' pr-review.md > pr-labels-section.md
-
-          grep '^- ' pr-labels-section.md | sed 's/^- //' > pr-labels.txt || true
-
-      - name: Extraer comentario de revision
-        if: steps.guard.outputs.should_publish == 'true'
-        shell: bash
-        run: |
-          awk '
-            /^## Resumen de revision$/ { capture=1 }
-            /^## Recomendacion$/ && capture { print; capture=2; next }
-            capture == 1 { print }
-            capture == 2 { print; exit }
-          ' pr-review.md > pr-review-comment.md
-
-      - name: Subir artefactos del revisor
-        if: steps.guard.outputs.should_publish == 'true'
+      - name: Subir artefactos de contexto
+        if: steps.guard.outputs.should_run == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: pull-request-reviewer
+          name: pr-review-context
           path: |
             pr-context.txt
             pr-changed-files.txt
@@ -132,29 +67,50 @@ jobs:
             change-numstat.txt
             selected-agents.json
             selected-agents.md
-            pr-review.md
-            pr-body-generated.md
-            pr-labels-section.md
-            pr-labels.txt
-            pr-review-comment.md
 
-  update_pull_request_body:
+  update_pr_description:
     runs-on: ubuntu-latest
-    needs: review_pull_request
-    if: github.event_name == 'pull_request' && needs.review_pull_request.outputs.should_publish == 'true'
+    needs: prepare_pr_context
+    if: needs.prepare_pr_context.outputs.should_run == 'true'
     permissions:
-      pull-requests: write
       contents: read
+      pull-requests: write
     steps:
       - name: Descargar repositorio
         uses: actions/checkout@v5
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 1
 
-      - name: Descargar artefactos del revisor
+      - name: Descargar artefactos de contexto
         uses: actions/download-artifact@v4
         with:
-          name: pull-request-reviewer
+          name: pr-review-context
+
+      - name: Generar descripcion propuesta
+        id: run_codex_description
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          responses-api-endpoint: "https://aleja-mmkilrhf-eastus2.cognitiveservices.azure.com/openai/v1/responses"
+          model: gpt-5.3-codex
+          effort: medium
+          sandbox: workspace-write
+          output-file: pr-description.md
+          prompt: |
+            Sigue las instrucciones de `.github/prompts/pull-request-description.md`.
+
+            Ficheros fuente de verdad:
+            - `pr-context.txt`
+            - `pr-changed-files.txt`
+            - `selected-agents.json`
+            - `selected-agents.md`
+
+            Restricciones:
+            - Usa solo el repositorio descargado y los ficheros generados.
+            - No inventes hechos no soportados por el contenido del repositorio.
+            - Si el diff fue truncado, indica claramente que el analisis es parcial.
+            - Devuelve solo Markdown valido.
 
       - name: Actualizar descripcion de la PR
         uses: actions/github-script@v7
@@ -164,7 +120,7 @@ jobs:
             const fs = require('fs');
             const markerStart = '<!-- ai-pr-reviewer:start -->';
             const markerEnd = '<!-- ai-pr-reviewer:end -->';
-            const generated = fs.readFileSync('pr-body-generated.md', 'utf8').trim();
+            const generated = fs.readFileSync('pr-description.md', 'utf8').trim();
             const currentBody = context.payload.pull_request.body || '';
             const managedBlock = `${markerStart}\n${generated}\n${markerEnd}`;
 
@@ -184,21 +140,86 @@ jobs:
               body: nextBody
             });
 
+      - name: Subir artefacto de descripcion
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-description
+          path: pr-description.md
+
+  review_pr_code:
+    runs-on: ubuntu-latest
+    needs: prepare_pr_context
+    if: needs.prepare_pr_context.outputs.should_run == 'true'
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - name: Descargar artefactos de contexto
+        uses: actions/download-artifact@v4
+        with:
+          name: pr-review-context
+
+      - name: Generar hallazgos de revision
+        id: run_codex_review
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          responses-api-endpoint: "https://aleja-mmkilrhf-eastus2.cognitiveservices.azure.com/openai/v1/responses"
+          model: gpt-5.3-codex
+          effort: medium
+          sandbox: workspace-write
+          output-file: pr-review-findings.json
+          prompt: |
+            Sigue las instrucciones de `.github/prompts/pull-request-code-review.md`.
+
+            Ficheros fuente de verdad:
+            - `pr-context.txt`
+            - `pr-changed-files.txt`
+            - `selected-agents.json`
+            - `selected-agents.md`
+
+            Restricciones:
+            - Revisa solo los cambios introducidos por esta pull request.
+            - No inventes hallazgos.
+            - Si el diff fue truncado, indica cobertura parcial en el veredicto.
+            - Devuelve solo JSON valido.
+
       - name: Aplicar etiquetas sugeridas
         uses: actions/github-script@v7
         with:
           github-token: ${{ github.token }}
           script: |
             const fs = require('fs');
-            if (!fs.existsSync('pr-labels.txt')) {
-              return;
-            }
+            const colorByLabel = {
+              feat: '0E8A16',
+              fix: 'D93F0B',
+              docs: '1D76DB',
+              test: '5319E7',
+              ci: '0052CC',
+              refactor: 'FBCA04',
+              perf: 'C2E0C6',
+              chore: 'BFD4F2',
+              revert: 'B60205',
+              style: 'F7C6C7',
+              build: '6E7781',
+              'area:dotnet': '512BD4',
+              'area:mcp': '0F766E',
+              'area:automation': '6F42C1',
+              'area:api': 'B60205',
+              'area:rag': 'A2EEEF'
+            };
 
-            const labels = fs
-              .readFileSync('pr-labels.txt', 'utf8')
-              .split(/\r?\n/)
-              .map(line => line.trim())
-              .filter(Boolean);
+            const review = JSON.parse(fs.readFileSync('pr-review-findings.json', 'utf8'));
+            const labels = [...new Set((review.labels || [])
+              .map(v => String(v).trim().replace(/[`"'“”‘’]/g, '').toLowerCase())
+              .filter(Boolean))];
 
             if (labels.length === 0) {
               return;
@@ -212,15 +233,12 @@ jobs:
                   name: label
                 });
               } catch (error) {
-                if (error.status !== 404) {
-                  throw error;
-                }
-
+                if (error.status !== 404) throw error;
                 await github.rest.issues.createLabel({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   name: label,
-                  color: 'BFDADC',
+                  color: colorByLabel[label] || 'BFDADC',
                   description: 'Etiqueta creada por Pull Request Reviewer'
                 });
               }
@@ -233,65 +251,122 @@ jobs:
               labels
             });
 
-      - name: Publicar comentario de revision
+      - name: Publicar review tecnica
         uses: actions/github-script@v7
         with:
           github-token: ${{ github.token }}
           script: |
             const fs = require('fs');
-            const marker = '<!-- ai-pr-reviewer-comment -->';
-            const commentBody = fs.existsSync('pr-review-comment.md')
-              ? fs.readFileSync('pr-review-comment.md', 'utf8').trim()
-              : '';
 
-            if (!commentBody) {
-              return;
+            function parseValidRightSideLines(patch) {
+              const valid = new Set();
+              if (!patch) return valid;
+              const lines = patch.split(/\r?\n/);
+              let right = 0;
+              for (const line of lines) {
+                const hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+                if (hunk) {
+                  right = Number(hunk[1]);
+                  continue;
+                }
+                if (line.startsWith('+') && !line.startsWith('+++')) {
+                  valid.add(right);
+                  right += 1;
+                  continue;
+                }
+                if (line.startsWith('-') && !line.startsWith('---')) {
+                  continue;
+                }
+                if (!line.startsWith('\\')) {
+                  valid.add(right);
+                  right += 1;
+                }
+              }
+              return valid;
             }
 
-            const body = `${marker}
+            const review = JSON.parse(fs.readFileSync('pr-review-findings.json', 'utf8'));
+            const findings = Array.isArray(review.findings) ? review.findings : [];
 
-            ## Revision automatizada de la PR
-
-            ${commentBody}`;
-
-            const { data: comments } = await github.rest.issues.listComments({
+            const { data: files } = await github.rest.pulls.listFiles({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
+              pull_number: context.payload.pull_request.number,
               per_page: 100
             });
 
-            const existing = comments.find(comment =>
-              comment.user?.type === 'Bot' &&
-              comment.body?.includes(marker)
-            );
+            const fileMap = new Map(files.map(file => [file.filename, file]));
+            const inlineComments = [];
+            const discarded = [];
 
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.payload.pull_request.number,
+            for (const finding of findings) {
+              const path = String(finding.path || '').trim();
+              const line = Number(finding.line || 0);
+              const body = `**${finding.severity || 'medium'}**: ${finding.title || 'Hallazgo'}\n\n${finding.comment || ''}`;
+
+              if (!path || !line || !fileMap.has(path)) {
+                discarded.push({ path, line, reason: 'Ruta o linea no valida para la PR.' });
+                continue;
+              }
+
+              const file = fileMap.get(path);
+              const validLines = parseValidRightSideLines(file.patch || '');
+              if (!validLines.has(line)) {
+                discarded.push({ path, line, reason: 'La linea no pertenece al diff comentable de la PR.' });
+                continue;
+              }
+
+              inlineComments.push({
+                path,
+                line,
+                side: 'RIGHT',
                 body
               });
             }
 
-  publish_summary:
-    runs-on: ubuntu-latest
-    needs: review_pull_request
-    if: needs.review_pull_request.outputs.should_publish == 'true' && needs.review_pull_request.outputs.final_message != ''
-    steps:
-      - name: Publicar en el resumen del job
-        shell: bash
-        env:
-          CODEX_FINAL_MESSAGE: ${{ needs.review_pull_request.outputs.final_message }}
-        run: |
-          {
-            echo "${CODEX_FINAL_MESSAGE}"
-          } >> "$GITHUB_STEP_SUMMARY"
+            const marker = '<!-- ai-pr-reviewer-review -->';
+            const summaryLines = [];
+            summaryLines.push(marker);
+            summaryLines.push('');
+            summaryLines.push(`**Veredicto**: ${review.verdict || 'comment'}`);
+            summaryLines.push('');
+            summaryLines.push(review.summary || 'Revision automatizada de la PR.');
+            summaryLines.push('');
+
+            if (Array.isArray(review.missing_tests) && review.missing_tests.length > 0) {
+              summaryLines.push('**Pruebas faltantes**');
+              for (const item of review.missing_tests) {
+                summaryLines.push(`- ${item}`);
+              }
+              summaryLines.push('');
+            }
+
+            if (discarded.length > 0) {
+              summaryLines.push('**Hallazgos no publicados como comentario inline**');
+              for (const item of discarded) {
+                summaryLines.push(`- ${item.path || '(sin ruta)'}:${item.line || '?'} - ${item.reason}`);
+              }
+            }
+
+            const event =
+              review.verdict === 'request_changes'
+                ? 'REQUEST_CHANGES'
+                : review.verdict === 'approve'
+                  ? 'APPROVE'
+                  : 'COMMENT';
+
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              commit_id: context.payload.pull_request.head.sha,
+              event,
+              body: summaryLines.join('\n'),
+              comments: inlineComments
+            });
+
+      - name: Subir artefacto de revision
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-code-review
+          path: pr-review-findings.json

@@ -24,7 +24,8 @@ Separar claramente tres responsabilidades:
 - `.github/workflows/pr_reviewer.yml`
 - `.github/workflows/daily_report.yml`
 - `.github/prompts/commit-analyzer.md`
-- `.github/prompts/pull-request-reviewer.md`
+- `.github/prompts/pull-request-description.md`
+- `.github/prompts/pull-request-code-review.md`
 - `.github/pull_request_template.md`
 - `.github/scripts/build-commit-context.sh`
 - `.github/scripts/build-pr-context.sh`
@@ -66,7 +67,7 @@ Si quieres cambiar el estilo de salida:
 
 ## Como usar `pull_request_reviewer`
 ### Proposito
-Analiza la PR, propone una descripcion basada en plantilla, etiqueta la PR y publica un resumen de revision.
+Analiza la PR, propone una descripcion basada en plantilla, etiqueta la PR y publica una revision tecnica.
 
 ### Disparador
 - `pull_request` en `opened`, `synchronize`, `reopened`
@@ -75,23 +76,22 @@ Analiza la PR, propone una descripcion basada en plantilla, etiqueta la PR y pub
 1. Construye el contexto de la PR.
 2. Lee la plantilla `.github/pull_request_template.md`.
 3. Calcula agentes candidatos a partir del catalogo y las reglas.
-4. Ejecuta el analisis con IA.
-5. Extrae la descripcion propuesta de la PR.
-6. Extrae etiquetas sugeridas y un comentario de revision.
-7. Actualiza el cuerpo de la PR dentro de un bloque gestionado.
+4. Genera la descripcion propuesta de la PR con un prompt dedicado.
+5. Actualiza el cuerpo de la PR dentro de un bloque gestionado.
+6. Ejecuta una revision tecnica separada sobre el diff.
+7. Extrae etiquetas sugeridas desde la revision estructurada.
 8. Crea las etiquetas si no existen y las aplica a la PR.
-9. Publica o actualiza un comentario de revision general.
-10. Publica el resumen en `GITHUB_STEP_SUMMARY`.
+9. Publica una review de GitHub con comentarios inline cuando las lineas sean validas.
 
 ### Salidas
-- `pr-review.md`
-- `pr-body-generated.md`
+- `pr-description.md`
+- `pr-review-findings.json`
 - `selected-agents.json`
 - `selected-agents.md`
 - `change-metrics.json`
-- `pr-labels.txt`
-- `pr-review-comment.md`
-- artefacto `pull-request-reviewer`
+- artefacto `pr-review-context`
+- artefacto `pr-description`
+- artefacto `pr-code-review`
 
 ### Como se actualiza la descripcion de la PR
 El workflow inserta o actualiza un bloque gestionado entre estos marcadores:
@@ -113,12 +113,12 @@ El reviewer propone etiquetas basadas en:
 
 Si la etiqueta no existe en el repositorio, el workflow la crea antes de aplicarla.
 
-### Comentario de revision
-El workflow publica un comentario general de revision y lo mantiene actualizado usando un marcador interno.
+### Revision tecnica
+El workflow genera una revision tecnica estructurada y la publica como review de GitHub.
 
 Esto permite:
-- no duplicar comentarios en cada sincronizacion de la PR
-- mantener una unica revision automatizada visible
+- añadir comentarios sobre partes concretas del diff cuando la ruta y la linea sean validas
+- emitir un veredicto general `comment`, `approve` o `request_changes`
 
 ## Como usar `daily_report`
 ### Proposito
