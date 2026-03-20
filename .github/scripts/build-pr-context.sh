@@ -14,6 +14,8 @@ PR_BASE_SHA="$(jq -r '.pull_request.base.sha // ""' "$EVENT_PATH")"
 PR_HEAD_REF="$(jq -r '.pull_request.head.ref // ""' "$EVENT_PATH")"
 PR_HEAD_SHA="$(jq -r '.pull_request.head.sha // ""' "$EVENT_PATH")"
 PR_TEMPLATE_FILE=".github/pull_request_template.md"
+PR_COMMIT_RANGE="$PR_BASE_SHA..$PR_HEAD_SHA"
+PR_DIFF_RANGE="$PR_BASE_SHA...$PR_HEAD_SHA"
 
 FULL_DIFF_FILE="pr-full-diff.txt"
 TRUNCATED_DIFF_FILE="pr-diff-truncated.txt"
@@ -35,9 +37,9 @@ if ! git cat-file -e "$PR_HEAD_SHA^{commit}" 2>/dev/null; then
   exit 1
 fi
 
-git diff --name-only "$PR_BASE_SHA...$PR_HEAD_SHA" > pr-changed-files.txt
-git diff --unified=3 "$PR_BASE_SHA...$PR_HEAD_SHA" > "$FULL_DIFF_FILE"
-git diff --numstat "$PR_BASE_SHA...$PR_HEAD_SHA" > "$NUMSTAT_FILE"
+git diff --name-only "$PR_DIFF_RANGE" > pr-changed-files.txt
+git diff --unified=3 "$PR_DIFF_RANGE" > "$FULL_DIFF_FILE"
+git diff --numstat "$PR_DIFF_RANGE" > "$NUMSTAT_FILE"
 
 FULL_SIZE="$(wc -c < "$FULL_DIFF_FILE" | tr -d ' ')"
 head -c "$MAX_BYTES" "$FULL_DIFF_FILE" > "$TRUNCATED_DIFF_FILE"
@@ -109,11 +111,11 @@ PY
   echo
 
   echo "# Lista de commits"
-  git log --oneline "$PR_BASE_SHA...$PR_HEAD_SHA" || true
+  git log --oneline "$PR_COMMIT_RANGE" || true
   echo
 
   echo "# Mensajes de commit"
-  git log --format='%H%n%s%n%b%n---' "$PR_BASE_SHA...$PR_HEAD_SHA" || true
+  git log --format='%H%n%s%n%b%n---' "$PR_COMMIT_RANGE" || true
   echo
 
   echo "# Ficheros modificados"
@@ -121,7 +123,7 @@ PY
   echo
 
   echo "# Estado de ficheros"
-  git diff --name-status "$PR_BASE_SHA...$PR_HEAD_SHA" || true
+  git diff --name-status "$PR_DIFF_RANGE" || true
   echo
 
   echo "# Numstat"
@@ -129,7 +131,7 @@ PY
   echo
 
   echo "# Estadisticas del diff"
-  git diff --stat "$PR_BASE_SHA...$PR_HEAD_SHA" || true
+  git diff --stat "$PR_DIFF_RANGE" || true
   echo
 
   if [[ "$TRUNCATED" == "true" ]]; then
