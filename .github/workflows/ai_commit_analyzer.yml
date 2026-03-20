@@ -1,0 +1,107 @@
+name: Analizador de Commits
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  analyze_commit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      final_message: ${{ steps.run_codex.outputs.final-message }}
+      should_publish: ${{ steps.guard.outputs.should_publish }}
+
+    steps:
+      - name: Validar secreto requerido
+        id: guard
+        shell: bash
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "Omitiendo Commit Analyzer: falta OPENROUTER_API_KEY."
+          else
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Descargar repositorio
+        if: steps.guard.outputs.should_publish == 'true'
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Construir contexto del commit
+        if: steps.guard.outputs.should_publish == 'true'
+        shell: bash
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: bash .github/scripts/build-commit-context.sh
+
+      - name: Ejecutar analisis del commit
+        if: steps.guard.outputs.should_publish == 'true'
+        id: run_codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          responses-api-endpoint: "https://openrouter.ai/api/v1/responses"
+          model: openai/gpt-5.3-codex
+          effort: medium
+          sandbox: workspace-write
+          output-file: commit-analysis.md
+          prompt: |
+            Sigue las instrucciones de `.github/prompts/commit-analyzer.md`.
+
+            Ficheros fuente de verdad:
+            - `commit-context.txt`
+
+            Repositorio:
+            - `${{ github.repository }}`
+
+            Restricciones:
+            - Usa solo el repositorio descargado y los ficheros generados.
+            - No inventes hechos no soportados por el contenido del repositorio.
+            - Si el diff fue truncado, indica claramente que el analisis es parcial.
+            - Devuelve solo Markdown valido.
+
+      - name: Extraer entrada de changelog
+        if: steps.guard.outputs.should_publish == 'true'
+        shell: bash
+        run: |
+          awk '
+            /^## Entrada de changelog$/ { capture=1; next }
+            /^## / && capture { exit }
+            capture { print }
+          ' commit-analysis.md > changelog-entry.md
+
+      - name: Subir artefactos del analizador
+        if: steps.guard.outputs.should_publish == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: commit-analyzer
+          path: |
+            commit-context.txt
+            change-metrics.json
+            change-numstat.txt
+            commit-analysis.md
+            changelog-entry.md
+
+  publish_summary:
+    runs-on: ubuntu-latest
+    needs: analyze_commit
+    if: needs.analyze_commit.outputs.should_publish == 'true' && needs.analyze_commit.outputs.final_message != ''
+    steps:
+      - name: Publicar en el resumen del job
+        shell: bash
+        env:
+          CODEX_FINAL_MESSAGE: ${{ needs.analyze_commit.outputs.final_message }}
+        run: |
+          {
+            echo "${CODEX_FINAL_MESSAGE}"
+          } >> "$GITHUB_STEP_SUMMARY"

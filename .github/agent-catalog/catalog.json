@@ -1,0 +1,102 @@
+{
+  "version": 2,
+  "policy": {
+    "max_agents_per_pr": 3,
+    "max_agents_by_size": {
+      "tiny": 1,
+      "small": 2,
+      "medium": 3,
+      "large": 4
+    },
+    "tiny_max_changed_lines": 10,
+    "small_max_changed_lines": 40,
+    "medium_max_changed_lines": 200,
+    "tiny_primary_only": true,
+    "small_primary_only": false,
+    "critical_paths_override_limits": true
+  },
+  "agents": [
+    {
+      "id": "workflow-agent",
+      "description": "Revisa cambios en GitHub Actions y automatizaciones del repositorio.",
+      "match": [
+        ".github/workflows/**",
+        ".github/scripts/**"
+      ],
+      "priority": 95,
+      "group": "automation",
+      "primary": true,
+      "min_lines_changed": 1,
+      "min_files_changed": 1,
+      "critical_paths": [
+        ".github/workflows/**"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "dotnet-agent",
+      "description": "Revisa cambios de codigo .NET y C#.",
+      "match": [
+        "**/*.cs",
+        "**/*.csproj",
+        "**/*.sln"
+      ],
+      "priority": 80,
+      "group": "backend-dotnet",
+      "primary": true,
+      "min_lines_changed": 1,
+      "min_files_changed": 1,
+      "critical_paths": [],
+      "enabled": true
+    },
+    {
+      "id": "agent-api",
+      "description": "Revisa contratos, endpoints y servicios de API backend.",
+      "match": [
+        "**/api/**",
+        "**/Api/**",
+        "**/Controllers/**",
+        "**/Endpoints/**",
+        "**/*.http"
+      ],
+      "priority": 90,
+      "group": "backend-api",
+      "primary": true,
+      "min_lines_changed": 5,
+      "min_files_changed": 1,
+      "critical_paths": [
+        "api/contracts/**"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "rag-agent",
+      "description": "Revisa experimentos RAG, logica de recuperacion y flujos vectoriales.",
+      "match": [
+        "RAG/**"
+      ],
+      "priority": 60,
+      "group": "rag",
+      "primary": true,
+      "min_lines_changed": 5,
+      "min_files_changed": 1,
+      "critical_paths": [],
+      "enabled": true
+    },
+    {
+      "id": "mcp-agent",
+      "description": "Revisa servidores MCP, herramientas y activos de WebMCP.",
+      "match": [
+        "MCP/**",
+        "WebMCP/**"
+      ],
+      "priority": 70,
+      "group": "mcp",
+      "primary": true,
+      "min_lines_changed": 3,
+      "min_files_changed": 1,
+      "critical_paths": [],
+      "enabled": true
+    }
+  ]
+}

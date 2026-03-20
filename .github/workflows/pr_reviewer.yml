@@ -1,4 +1,4 @@
-name: Codex PR Review
+name: Revisor de Pull Requests
 
 on:
   pull_request:
@@ -6,221 +6,380 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
+  issues: write
 
 concurrency:
-  group: codex-review-${{ github.event.pull_request.number }}
+  group: pr-reviewer-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  codex_review:
+  prepare_pr_context:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
     outputs:
-      final_message: ${{ steps.run_codex.outputs.final-message }}
-      should_comment: ${{ steps.guard.outputs.should_comment }}
-
+      should_run: ${{ steps.guard.outputs.should_run }}
     steps:
-      - name: Guard for missing secret
+      - name: Validar secreto requerido
         id: guard
         shell: bash
         env:
-          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          if [ -z "$AZURE_OPENAI_API_KEY" ]; then
-            echo "should_comment=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping Codex review: missing AZURE_OPENAI_API_KEY."
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Omitiendo Pull Request Reviewer: falta OPENROUTER_API_KEY."
           else
-            echo "should_comment=true" >> "$GITHUB_OUTPUT"
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout PR head commit
-        if: steps.guard.outputs.should_comment == 'true'
+      - name: Descargar repositorio
+        if: steps.guard.outputs.should_run == 'true'
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
-      - name: Fetch base ref
-        if: steps.guard.outputs.should_comment == 'true'
+      - name: Construir contexto de la PR
+        if: steps.guard.outputs.should_run == 'true'
         shell: bash
         env:
-          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          git fetch --no-tags origin "$PR_BASE_REF"
+          git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
+          bash .github/scripts/build-pr-context.sh
 
-      - name: Build review context
-        if: steps.guard.outputs.should_comment == 'true'
+      - name: Seleccionar agentes
+        if: steps.guard.outputs.should_run == 'true'
         shell: bash
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -eu
+        run: node .github/scripts/select-agents.js pr-changed-files.txt .github/agent-catalog/catalog.json
 
-          MAX_BYTES=120000
-          DIFF_FILE=pr-diff.txt
-          FULL_DIFF_FILE=full-diff.txt
+      - name: Subir artefactos de contexto
+        if: steps.guard.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-review-context
+          path: |
+            pr-context.txt
+            pr-changed-files.txt
+            change-metrics.json
+            change-numstat.txt
+            selected-agents.json
+            selected-agents.md
 
-          git diff --unified=3 "$PR_BASE_SHA...$PR_HEAD_SHA" > "$FULL_DIFF_FILE" || true
+  update_pr_description:
+    runs-on: ubuntu-latest
+    needs: prepare_pr_context
+    if: needs.prepare_pr_context.outputs.should_run == 'true'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
 
-          FULL_SIZE=$(wc -c < "$FULL_DIFF_FILE" | tr -d ' ')
-          head -c "$MAX_BYTES" "$FULL_DIFF_FILE" > "$DIFF_FILE"
+      - name: Descargar artefactos de contexto
+        uses: actions/download-artifact@v4
+        with:
+          name: pr-review-context
 
-          TRUNCATED=false
-          if [ "$FULL_SIZE" -gt "$MAX_BYTES" ]; then
-            TRUNCATED=true
-          fi
-
-          {
-            printf '# PR metadata\n'
-            printf 'PR: #%s\n' "$PR_NUMBER"
-            printf 'Title: %s\n' "$PR_TITLE"
-            printf 'Base: %s (%s)\n' "$PR_BASE_REF" "$PR_BASE_SHA"
-            printf 'Head: %s (%s)\n' "$PR_HEAD_REF" "$PR_HEAD_SHA"
-            printf '\n'
-
-            printf '# Commit list\n'
-            git log --oneline "$PR_BASE_SHA...$PR_HEAD_SHA" || true
-            printf '\n'
-
-            printf '# Changed files\n'
-            git diff --name-status "$PR_BASE_SHA...$PR_HEAD_SHA" || true
-            printf '\n'
-
-            printf '# Diff metadata\n'
-            printf 'Full diff size bytes: %s\n' "$FULL_SIZE"
-            printf 'Diff truncated: %s\n' "$TRUNCATED"
-            printf 'Max bytes included: %s\n' "$MAX_BYTES"
-            printf '\n'
-
-            if [ "$TRUNCATED" = "true" ]; then
-              printf '[WARNING] The diff included below is truncated.\n'
-              printf '[WARNING] Review must be treated as partial coverage.\n'
-              printf '\n'
-            fi
-
-            printf '# Unified diff\n'
-            cat "$DIFF_FILE"
-          } > pr-review-context.txt
-
-      - name: Run Codex review
-        if: steps.guard.outputs.should_comment == 'true'
-        id: run_codex
+      - name: Generar descripcion propuesta
+        id: run_codex_description
         uses: openai/codex-action@v1
         with:
-          openai-api-key: ${{ secrets.AZURE_OPENAI_API_KEY }}
-          responses-api-endpoint: "https://aleja-mmkilrhf-eastus2.cognitiveservices.azure.com/openai/v1/responses"
-          model: gpt-5.3-codex
+          openai-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          responses-api-endpoint: "https://openrouter.ai/api/v1/responses"
+          model: openai/gpt-5.3-codex
           effort: medium
           sandbox: workspace-write
+          output-file: pr-description.md
           prompt: |
-            You are an experienced senior code reviewer.
+            Sigue las instrucciones de `.github/prompts/pull-request-description.md`.
 
-            Review ONLY the changes introduced by this pull request.
-            Use the checked-out repository and pr-review-context.txt as the source of truth.
+            Ficheros fuente de verdad:
+            - `pr-context.txt`
+            - `pr-changed-files.txt`
+            - `selected-agents.json`
+            - `selected-agents.md`
 
-            Pull request info:
-            - Repository: ${{ github.repository }}
-            - PR number: ${{ github.event.pull_request.number }}
-            - Title: ${{ github.event.pull_request.title }}
+            Restricciones:
+            - Usa solo el repositorio descargado y los ficheros generados.
+            - No inventes hechos no soportados por el contenido del repositorio.
+            - Si el diff fue truncado, indica claramente que el analisis es parcial.
+            - Devuelve solo Markdown valido.
 
-            PR body:
-            ---
-            ${{ github.event.pull_request.body }}
-            ---
-
-            Review criteria:
-            - correctness
-            - regressions
-            - edge cases
-            - security concerns
-            - performance issues
-            - maintainability
-            - test gaps
-
-            Important constraints:
-            - Review only the PR diff, not unrelated repository code.
-            - Do not invent issues.
-            - Ignore minor style nits unless they hide a real engineering problem.
-            - Prefer high-signal comments over exhaustive commentary.
-            - If the diff is marked as truncated in pr-review-context.txt, explicitly say the review is partial.
-            - If the PR looks good, say so clearly.
-
-            Output in Markdown using exactly this structure:
-
-            ## Verdict
-            One short paragraph.
-
-            ## Findings
-            - If there are important issues, list up to 5 bullets.
-            - Each bullet must include:
-              - severity: high | medium | low
-              - file or area affected
-              - concise explanation
-              - suggested fix
-
-            ## Missing tests
-            - List only if relevant.
-
-            ## Summary
-            A short final recommendation:
-            - approve
-            - approve with minor follow-ups
-            - request changes
-
-  post_feedback:
-    runs-on: ubuntu-latest
-    needs: codex_review
-    if: needs.codex_review.outputs.should_comment == 'true' && needs.codex_review.outputs.final_message != ''
-    permissions:
-      issues: write
-      pull-requests: write
-
-    steps:
-      - name: Upsert review comment
+      - name: Actualizar descripcion de la PR
         uses: actions/github-script@v7
-        env:
-          CODEX_FINAL_MESSAGE: ${{ needs.codex_review.outputs.final_message }}
         with:
           github-token: ${{ github.token }}
           script: |
-            const marker = "<!-- codex-review-comment -->";
-            const body = `${marker}
+            const fs = require('fs');
+            const markerStart = '<!-- ai-pr-reviewer:start -->';
+            const markerEnd = '<!-- ai-pr-reviewer:end -->';
+            const generated = fs.readFileSync('pr-description.md', 'utf8').trim();
+            const currentBody = context.payload.pull_request.body || '';
+            const managedBlock = `${markerStart}\n${generated}\n${markerEnd}`;
 
-            ## Codex Review
+            let nextBody = currentBody.trim();
+            if (nextBody.includes(markerStart) && nextBody.includes(markerEnd)) {
+              nextBody = nextBody.replace(new RegExp(`${markerStart}[\\s\\S]*?${markerEnd}`), managedBlock);
+            } else if (nextBody.length === 0) {
+              nextBody = managedBlock;
+            } else {
+              nextBody = `${managedBlock}\n\n${nextBody}`;
+            }
 
-            ${process.env.CODEX_FINAL_MESSAGE}`;
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              body: nextBody
+            });
 
-            const { data: comments } = await github.rest.issues.listComments({
+      - name: Subir artefacto de descripcion
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-description
+          path: pr-description.md
+
+  review_pr_code:
+    runs-on: ubuntu-latest
+    needs: prepare_pr_context
+    if: needs.prepare_pr_context.outputs.should_run == 'true'
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - name: Descargar artefactos de contexto
+        uses: actions/download-artifact@v4
+        with:
+          name: pr-review-context
+
+      - name: Generar hallazgos de revision
+        id: run_codex_review
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          responses-api-endpoint: "https://openrouter.ai/api/v1/responses"
+          model: openai/gpt-5.3-codex
+          effort: medium
+          sandbox: workspace-write
+          output-file: pr-review-findings.json
+          prompt: |
+            Sigue las instrucciones de `.github/prompts/pull-request-code-review.md`.
+
+            Ficheros fuente de verdad:
+            - `pr-context.txt`
+            - `pr-changed-files.txt`
+            - `selected-agents.json`
+            - `selected-agents.md`
+
+            Restricciones:
+            - Revisa solo los cambios introducidos por esta pull request.
+            - No inventes hallazgos.
+            - Si el diff fue truncado, indica cobertura parcial en el veredicto.
+            - Devuelve solo JSON valido.
+
+      - name: Aplicar etiquetas sugeridas
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('fs');
+            const colorByLabel = {
+              feat: '0E8A16',
+              fix: 'D93F0B',
+              docs: '1D76DB',
+              test: '5319E7',
+              ci: '0052CC',
+              refactor: 'FBCA04',
+              perf: 'C2E0C6',
+              chore: 'BFD4F2',
+              revert: 'B60205',
+              style: 'F7C6C7',
+              build: '6E7781',
+              'area:dotnet': '512BD4',
+              'area:mcp': '0F766E',
+              'area:automation': '6F42C1',
+              'area:api': 'B60205',
+              'area:rag': 'A2EEEF'
+            };
+
+            const review = JSON.parse(fs.readFileSync('pr-review-findings.json', 'utf8'));
+            const labels = [...new Set((review.labels || [])
+              .map(v => String(v).trim().replace(/[`"'“”‘’]/g, '').toLowerCase())
+              .filter(Boolean))];
+
+            if (labels.length === 0) {
+              return;
+            }
+
+            for (const label of labels) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label,
+                  color: colorByLabel[label] || 'BFDADC',
+                  description: 'Etiqueta creada por Pull Request Reviewer'
+                });
+              }
+            }
+
+            await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.pull_request.number,
-              per_page: 100
+              labels
             });
 
-            const existing = comments.find(comment =>
-              comment.user?.type === "Bot" &&
-              comment.body?.includes(marker)
-            );
+      - name: Publicar review tecnica
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('fs');
 
-            if (existing) {
-              await github.rest.issues.updateComment({
+            function parseValidRightSideLines(patch) {
+              const valid = new Set();
+              if (!patch) return valid;
+              const lines = patch.split(/\r?\n/);
+              let right = 0;
+              for (const line of lines) {
+                const hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+                if (hunk) {
+                  right = Number(hunk[1]);
+                  continue;
+                }
+                if (line.startsWith('+') && !line.startsWith('+++')) {
+                  valid.add(right);
+                  right += 1;
+                  continue;
+                }
+                if (line.startsWith('-') && !line.startsWith('---')) {
+                  continue;
+                }
+                if (!line.startsWith('\\')) {
+                  valid.add(right);
+                  right += 1;
+                }
+              }
+              return valid;
+            }
+
+            const review = JSON.parse(fs.readFileSync('pr-review-findings.json', 'utf8'));
+            const findings = Array.isArray(review.findings) ? review.findings : [];
+
+            const files = [];
+            for (let page = 1; ; page += 1) {
+              const { data } = await github.rest.pulls.listFiles({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                comment_id: existing.id,
-                body
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+                page
               });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.payload.pull_request.number,
+
+              files.push(...data);
+              if (data.length < 100) {
+                break;
+              }
+            }
+
+            const fileMap = new Map(files.map(file => [file.filename, file]));
+            const inlineComments = [];
+            const discarded = [];
+
+            for (const finding of findings) {
+              const path = String(finding.path || '').trim();
+              const line = Number(finding.line || 0);
+              const body = `**${finding.severity || 'medium'}**: ${finding.title || 'Hallazgo'}\n\n${finding.comment || ''}`;
+
+              if (!path || !line || !fileMap.has(path)) {
+                discarded.push({ path, line, reason: 'Ruta o linea no valida para la PR.' });
+                continue;
+              }
+
+              const file = fileMap.get(path);
+              const validLines = parseValidRightSideLines(file.patch || '');
+              if (!validLines.has(line)) {
+                discarded.push({ path, line, reason: 'La linea no pertenece al diff comentable de la PR.' });
+                continue;
+              }
+
+              inlineComments.push({
+                path,
+                line,
+                side: 'RIGHT',
                 body
               });
             }
+
+            const marker = '<!-- ai-pr-reviewer-review -->';
+            const summaryLines = [];
+            summaryLines.push(marker);
+            summaryLines.push('');
+            summaryLines.push(`**Veredicto**: ${review.verdict || 'comment'}`);
+            summaryLines.push('');
+            summaryLines.push(review.summary || 'Revision automatizada de la PR.');
+            summaryLines.push('');
+
+            if (Array.isArray(review.missing_tests) && review.missing_tests.length > 0) {
+              summaryLines.push('**Pruebas faltantes**');
+              for (const item of review.missing_tests) {
+                summaryLines.push(`- ${item}`);
+              }
+              summaryLines.push('');
+            }
+
+            if (discarded.length > 0) {
+              summaryLines.push('**Hallazgos no publicados como comentario inline**');
+              for (const item of discarded) {
+                summaryLines.push(`- ${item.path || '(sin ruta)'}:${item.line || '?'} - ${item.reason}`);
+              }
+            }
+
+            const requestedEvent =
+              review.verdict === 'request_changes'
+                ? 'REQUEST_CHANGES'
+                : review.verdict === 'approve'
+                  ? 'APPROVE'
+                  : 'COMMENT';
+
+            const event = requestedEvent === 'COMMENT' ? 'COMMENT' : 'COMMENT';
+
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              commit_id: context.payload.pull_request.head.sha,
+              event,
+              body: `${summaryLines.join('\n')}\n\nVeredicto solicitado por el modelo: ${review.verdict || 'comment'}`,
+              comments: inlineComments
+            });
+
+      - name: Subir artefacto de revision
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-code-review
+          path: pr-review-findings.json
