@@ -7,6 +7,7 @@ on:
 
 jobs:
   daily_report:
+    if: false
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -38,9 +39,9 @@ jobs:
         id: run_codex
         uses: openai/codex-action@v1
         with:
-          openai-api-key: ${{ secrets.AZURE_OPENAI_API_KEY }}
-          responses-api-endpoint: "https://aleja-mmkilrhf-eastus2.cognitiveservices.azure.com/openai/v1/responses"
-          model: gpt-5.3-codex
+          openai-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          responses-api-endpoint: "https://openrouter.ai/api/v1/responses"
+          model: openai/gpt-5.3-codex
           effort: medium
           sandbox: workspace-write
           output-file: daily-report.md

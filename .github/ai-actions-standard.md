@@ -189,8 +189,8 @@ La plantilla se organiza en:
 ## Configuracion Minima para Adoptar la Plantilla
 Para mover esta plantilla a otro repositorio basta con:
 1. copiar la carpeta `.github/`
-2. configurar el secret `AZURE_OPENAI_API_KEY`
-3. revisar el endpoint de Responses API en los workflows
+2. configurar el secret `OPENROUTER_API_KEY`
+3. revisar que los workflows apunten a `https://openrouter.ai/api/v1/responses`
 4. adaptar el catalogo de agentes al stack del repositorio
 
 ## Orden Recomendado de Adopcion
