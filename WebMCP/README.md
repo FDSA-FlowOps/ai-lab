@@ -16,6 +16,7 @@ Pequena web de ejemplo que expone herramientas de una app de tareas mediante `na
 2. Abre `http://localhost:3000` (o el puerto que corresponda).
 
 `localhost` cuenta como secure context, que es importante para APIs web modernas.
+No hay paso de build para esta demo: es una web estatica servida directamente desde esta carpeta.
 
 ## Uso en GitHub Pages
 
