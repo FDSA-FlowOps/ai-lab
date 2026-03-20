@@ -10,8 +10,14 @@ function globToRegExp(pattern) {
 
     if (ch === "*") {
       if (next === "*") {
-        regex += ".*";
-        i += 1;
+        const afterNext = pattern[i + 2];
+        if (afterNext === "/") {
+          regex += "(?:.*/)?";
+          i += 2;
+        } else {
+          regex += ".*";
+          i += 1;
+        }
       } else {
         regex += "[^/]*";
       }

@@ -20,9 +20,24 @@ TRUNCATED_DIFF_FILE="pr-diff-truncated.txt"
 NUMSTAT_FILE="change-numstat.txt"
 METRICS_FILE="change-metrics.json"
 
-git diff --name-only "$PR_BASE_SHA...$PR_HEAD_SHA" > pr-changed-files.txt || true
-git diff --unified=3 "$PR_BASE_SHA...$PR_HEAD_SHA" > "$FULL_DIFF_FILE" || true
-git diff --numstat "$PR_BASE_SHA...$PR_HEAD_SHA" > "$NUMSTAT_FILE" || true
+if [[ -z "$PR_BASE_SHA" || -z "$PR_HEAD_SHA" ]]; then
+  echo "Faltan PR_BASE_SHA o PR_HEAD_SHA en el evento de GitHub." >&2
+  exit 1
+fi
+
+if ! git cat-file -e "$PR_BASE_SHA^{commit}" 2>/dev/null; then
+  echo "El commit base $PR_BASE_SHA no esta disponible localmente. Asegura un fetch previo de la base." >&2
+  exit 1
+fi
+
+if ! git cat-file -e "$PR_HEAD_SHA^{commit}" 2>/dev/null; then
+  echo "El commit head $PR_HEAD_SHA no esta disponible localmente." >&2
+  exit 1
+fi
+
+git diff --name-only "$PR_BASE_SHA...$PR_HEAD_SHA" > pr-changed-files.txt
+git diff --unified=3 "$PR_BASE_SHA...$PR_HEAD_SHA" > "$FULL_DIFF_FILE"
+git diff --numstat "$PR_BASE_SHA...$PR_HEAD_SHA" > "$NUMSTAT_FILE"
 
 FULL_SIZE="$(wc -c < "$FULL_DIFF_FILE" | tr -d ' ')"
 head -c "$MAX_BYTES" "$FULL_DIFF_FILE" > "$TRUNCATED_DIFF_FILE"

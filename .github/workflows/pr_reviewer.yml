@@ -48,7 +48,9 @@ jobs:
         env:
           GITHUB_EVENT_PATH: ${{ github.event_path }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: bash .github/scripts/build-pr-context.sh
+        run: |
+          git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
+          bash .github/scripts/build-pr-context.sh
 
       - name: Seleccionar agentes
         if: steps.guard.outputs.should_run == 'true'
@@ -288,12 +290,21 @@ jobs:
             const review = JSON.parse(fs.readFileSync('pr-review-findings.json', 'utf8'));
             const findings = Array.isArray(review.findings) ? review.findings : [];
 
-            const { data: files } = await github.rest.pulls.listFiles({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number,
-              per_page: 100
-            });
+            const files = [];
+            for (let page = 1; ; page += 1) {
+              const { data } = await github.rest.pulls.listFiles({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+                page
+              });
+
+              files.push(...data);
+              if (data.length < 100) {
+                break;
+              }
+            }
 
             const fileMap = new Map(files.map(file => [file.filename, file]));
             const inlineComments = [];
