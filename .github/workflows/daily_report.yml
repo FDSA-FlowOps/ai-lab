@@ -7,7 +7,6 @@ on:
 
 jobs:
   daily_report:
-    if: false
     runs-on: ubuntu-latest
     permissions:
       contents: read

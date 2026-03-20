@@ -4,7 +4,7 @@ Esta carpeta de automatizacion esta preparada para reutilizarse en otros reposit
 
 La idea base es simple:
 - copiar `.github/` al nuevo repositorio
-- configurar el secret `AZURE_OPENAI_API_KEY`
+- configurar el secret `OPENROUTER_API_KEY`
 - revisar el endpoint de Responses API
 - adaptar el catalogo de agentes al stack del repo
 
@@ -13,27 +13,27 @@ Con eso ya deberias poder ejecutar la plantilla.
 ## Que incluye la plantilla
 
 ### Workflows base
-- [Analizador de Commits](C:/Users/fernando_campos/Repositories/ai-lab/.github/workflows/ai_commit_analyzer.yml)
-- [Revisor de Pull Requests](C:/Users/fernando_campos/Repositories/ai-lab/.github/workflows/pr_reviewer.yml)
-- [Informe Diario del Repositorio](C:/Users/fernando_campos/Repositories/ai-lab/.github/workflows/daily_report.yml)
+- [Analizador de Commits](./.github/workflows/ai_commit_analyzer.yml)
+- [Revisor de Pull Requests](./.github/workflows/pr_reviewer.yml)
+- [Informe Diario del Repositorio](./.github/workflows/daily_report.yml)
 
 ### Configuracion y reglas
-- [Estandar funcional](C:/Users/fernando_campos/Repositories/ai-lab/.github/ai-actions-standard.md)
-- [Catalogo de agentes](C:/Users/fernando_campos/Repositories/ai-lab/.github/agent-catalog/catalog.json)
-- [Plantilla de PR](C:/Users/fernando_campos/Repositories/ai-lab/.github/pull_request_template.md)
+- [Estandar funcional](./.github/ai-actions-standard.md)
+- [Catalogo de agentes](./.github/agent-catalog/catalog.json)
+- [Plantilla de PR](./.github/pull_request_template.md)
 
 ### Prompts
-- [Prompt de Commit Analyzer](C:/Users/fernando_campos/Repositories/ai-lab/.github/prompts/commit-analyzer.md)
-- [Prompt de descripcion de PR](C:/Users/fernando_campos/Repositories/ai-lab/.github/prompts/pull-request-description.md)
-- [Prompt de code review de PR](C:/Users/fernando_campos/Repositories/ai-lab/.github/prompts/pull-request-code-review.md)
+- [Prompt de Commit Analyzer](./.github/prompts/commit-analyzer.md)
+- [Prompt de descripcion de PR](./.github/prompts/pull-request-description.md)
+- [Prompt de code review de PR](./.github/prompts/pull-request-code-review.md)
 
 ### Scripts
-- [Contexto de commits](C:/Users/fernando_campos/Repositories/ai-lab/.github/scripts/build-commit-context.sh)
-- [Contexto de PR](C:/Users/fernando_campos/Repositories/ai-lab/.github/scripts/build-pr-context.sh)
-- [Selector de agentes](C:/Users/fernando_campos/Repositories/ai-lab/.github/scripts/select-agents.js)
+- [Contexto de commits](./.github/scripts/build-commit-context.sh)
+- [Contexto de PR](./.github/scripts/build-pr-context.sh)
+- [Selector de agentes](./.github/scripts/select-agents.js)
 
 ### Workflow opcional
-- [Ejemplo de GitHub Models](C:/Users/fernando_campos/Repositories/ai-lab/.github/workflows/github_models.yml)
+- [Ejemplo de GitHub Models](./.github/workflows/github_models.yml)
   No forma parte del nucleo de la plantilla. Es solo un ejemplo de llamada a GitHub Models con `PAT_MODELS_TOKEN`.
 
 ## Responsabilidad de cada workflow
@@ -114,7 +114,7 @@ Artefacto principal:
 
 ## Como funciona la seleccion de agentes
 
-La logica real de seleccion esta en [select-agents.js](C:/Users/fernando_campos/Repositories/ai-lab/.github/scripts/select-agents.js) y la configuracion vive en [catalog.json](C:/Users/fernando_campos/Repositories/ai-lab/.github/agent-catalog/catalog.json).
+La logica real de seleccion esta en [select-agents.js](./.github/scripts/select-agents.js) y la configuracion vive en [catalog.json](./.github/agent-catalog/catalog.json).
 
 La evaluacion sigue este orden:
 1. leer ficheros modificados
@@ -135,20 +135,20 @@ Esto permite que una PR pequena no active demasiados agentes.
 
 ### Configuracion minima obligatoria
 En casi cualquier repo solo necesitas revisar:
-- el secret `AZURE_OPENAI_API_KEY`
+- el secret `OPENROUTER_API_KEY`
 - el endpoint `responses-api-endpoint` en los workflows
 - el catalogo de agentes
 
 ### Secret requerido
-- `AZURE_OPENAI_API_KEY`
+- `OPENROUTER_API_KEY`
 
 Sin este secret, los workflows base se auto-omiten de forma segura.
 
 ### Endpoint del modelo
-Los workflows usan hoy un endpoint de Azure OpenAI Responses API. Si cambias de entorno, debes actualizar ese valor en:
-- [ai_commit_analyzer.yml](C:/Users/fernando_campos/Repositories/ai-lab/.github/workflows/ai_commit_analyzer.yml)
-- [pr_reviewer.yml](C:/Users/fernando_campos/Repositories/ai-lab/.github/workflows/pr_reviewer.yml)
-- [daily_report.yml](C:/Users/fernando_campos/Repositories/ai-lab/.github/workflows/daily_report.yml)
+Los workflows usan hoy OpenRouter sobre la Responses API. Si cambias de entorno, debes actualizar ese valor en:
+- [ai_commit_analyzer.yml](./.github/workflows/ai_commit_analyzer.yml)
+- [pr_reviewer.yml](./.github/workflows/pr_reviewer.yml)
+- [daily_report.yml](./.github/workflows/daily_report.yml)
 
 ### Catalogo de agentes
 Los campos mas habituales son:
@@ -175,25 +175,25 @@ Por agente:
 
 ### Plantilla de PR
 Si tu equipo usa otra estructura de PR, adapta:
-- [pull_request_template.md](C:/Users/fernando_campos/Repositories/ai-lab/.github/pull_request_template.md)
-- [pull-request-description.md](C:/Users/fernando_campos/Repositories/ai-lab/.github/prompts/pull-request-description.md)
+- [pull_request_template.md](./.github/pull_request_template.md)
+- [pull-request-description.md](./.github/prompts/pull-request-description.md)
 
 ### Taxonomia de labels
 Si tu equipo ya tiene labels estandar, revisa el mapa de colores y nombres en:
-- [pr_reviewer.yml](C:/Users/fernando_campos/Repositories/ai-lab/.github/workflows/pr_reviewer.yml)
+- [pr_reviewer.yml](./.github/workflows/pr_reviewer.yml)
 
 ## Como mover esta plantilla a otro repo
 
 ### Opcion minima
 1. Copia toda la carpeta `.github/`.
-2. Crea el secret `AZURE_OPENAI_API_KEY`.
-3. Ajusta el endpoint de Azure OpenAI si cambia el entorno.
-4. Revisa [catalog.json](C:/Users/fernando_campos/Repositories/ai-lab/.github/agent-catalog/catalog.json) para que coincida con el stack del nuevo repo.
-5. Revisa [pull_request_template.md](C:/Users/fernando_campos/Repositories/ai-lab/.github/pull_request_template.md) si tu equipo usa otra plantilla.
+2. Crea el secret `OPENROUTER_API_KEY`.
+3. Ajusta el endpoint de Responses API si cambia el entorno.
+4. Revisa [catalog.json](./.github/agent-catalog/catalog.json) para que coincida con el stack del nuevo repo.
+5. Revisa [pull_request_template.md](./.github/pull_request_template.md) si tu equipo usa otra plantilla.
 
 ### Opcion recomendada
 1. Copia `.github/`.
-2. Configura `AZURE_OPENAI_API_KEY`.
+2. Configura `OPENROUTER_API_KEY`.
 3. Ajusta el endpoint.
 4. Adapta el catalogo de agentes.
 5. Ejecuta primero `daily_report` manualmente.
@@ -237,5 +237,5 @@ Si tu equipo ya tiene labels estandar, revisa el mapa de colores y nombres en:
 La plantilla esta pensada para ser funcional y portable, pero aun hay mejoras razonables:
 - añadir tests a los scripts
 - unificar del todo el idioma de todos los ficheros restantes
-- parametrizar el endpoint de Azure OpenAI via variables del repo
+- parametrizar el endpoint de OpenRouter o del proveedor elegido via variables del repo
 - endurecer la validacion de hallazgos antes de publicar reviews inline
