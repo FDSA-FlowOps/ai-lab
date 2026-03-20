@@ -359,12 +359,14 @@ jobs:
               }
             }
 
-            const event =
+            const requestedEvent =
               review.verdict === 'request_changes'
                 ? 'REQUEST_CHANGES'
                 : review.verdict === 'approve'
                   ? 'APPROVE'
                   : 'COMMENT';
+
+            const event = requestedEvent === 'COMMENT' ? 'COMMENT' : 'COMMENT';
 
             await github.rest.pulls.createReview({
               owner: context.repo.owner,
@@ -372,7 +374,7 @@ jobs:
               pull_number: context.payload.pull_request.number,
               commit_id: context.payload.pull_request.head.sha,
               event,
-              body: summaryLines.join('\n'),
+              body: `${summaryLines.join('\n')}\n\nVeredicto solicitado por el modelo: ${review.verdict || 'comment'}`,
               comments: inlineComments
             });
 
