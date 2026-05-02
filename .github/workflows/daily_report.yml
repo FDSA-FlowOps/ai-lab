@@ -1,8 +1,6 @@
 name: Informe Diario del Repositorio
 
 on:
-  schedule:
-    - cron: "42 19 * * 1-5"
   workflow_dispatch:
 
 jobs:
