@@ -3,7 +3,19 @@ import { experimental_composeSpec, experimental_createEvaluator } from '@json-re
 import { catalog, scenarios, sourceCommit } from '../src/catalog.mjs';
 
 // This script runs only in CI/server context. Never import it from the browser.
-const evaluate = experimental_createEvaluator({ model:'typesafe-ai/jev', apiKey:process.env.JEV_AI_GATEWAY_API_KEY, timeoutMs:25000 });
+const evaluate = experimental_createEvaluator({ model:'typesafe-ai/jev', apiKey:process.env.JEV_AI_GATEWAY_API_KEY, timeoutMs:25000,
+  fetch: async (url,options) => {
+    const response=await fetch(url,options);
+    if(!response.ok){
+      const data=await response.clone().json().catch(()=>({}));
+      const message=String(data.error?.message??data.message??'No error description supplied');
+      // Provider error messages only; never print headers, requests or credentials.
+      const safe=message.split(process.env.JEV_AI_GATEWAY_API_KEY).join('[redacted]').slice(0,500);
+      console.error('Gateway rejected evaluation:',response.status,safe);
+    }
+    return response;
+  }
+});
 const runs=[];
 async function compose(scenario, prompt, initialSpec) {
   const events=[];
