@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {catalog,scenarios,sourceCommit} from '../src/catalog.mjs';
 const data=JSON.parse(await readFile('public/runs.json','utf8'));
-assert.equal(data.model,'typesafe-ai/jev');
+assert.equal(data.model,'typesafe/jev-1.13');
 assert.equal(data.sourceCommit,sourceCommit);
 for(const scene of scenarios){
   const run=data.runs.find(r=>r.id===scene.id);

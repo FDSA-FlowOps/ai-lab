@@ -5,7 +5,7 @@ on:
       publish_pages:
         description: Publish to Pages (requires Pages support enabled for this repository)
         type: boolean
-        default: false
+        default: true
   push:
     branches: [main]
     paths: ['Jev/decision-studio/**', '.github/workflows/jev-studio.yml']
@@ -33,7 +33,7 @@ jobs:
       - name: Compose with real Jev (server-side only)
         run: npm run generate
         env:
-          JEV_AI_GATEWAY_API_KEY: ${{ secrets.JEV_AI_GATEWAY_API_KEY }}
+          JEV_OPENROUTER_API_KEY: ${{ secrets.JEV_OPENROUTER_API_KEY }}
       - run: node scripts/check-recordings.mjs
       - run: npm run build
       - uses: actions/upload-artifact@v4
@@ -42,11 +42,11 @@ jobs:
           path: Jev/decision-studio/dist
           retention-days: 14
       - uses: actions/upload-pages-artifact@v3
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_pages }}
+        if: ${{ github.event_name == 'push' || inputs.publish_pages }}
         with:
           path: Jev/decision-studio/dist
   deploy:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_pages }}
+    if: ${{ github.event_name == 'push' || inputs.publish_pages }}
     needs: build
     runs-on: ubuntu-latest
     permissions:
