@@ -1,0 +1,61 @@
+name: Jev Decision Studio
+on:
+  workflow_dispatch:
+    inputs:
+      publish_pages:
+        description: Publish to Pages (requires Pages support enabled for this repository)
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths: ['Jev/decision-studio/**', '.github/workflows/jev-studio.yml']
+permissions:
+  contents: read
+concurrency:
+  group: jev-studio
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: Jev/decision-studio
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: Jev/decision-studio/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - name: Compose with real Jev (server-side only)
+        run: npm run generate
+        env:
+          JEV_AI_GATEWAY_API_KEY: ${{ secrets.JEV_AI_GATEWAY_API_KEY }}
+      - run: node scripts/check-recordings.mjs
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jev-studio-site
+          path: Jev/decision-studio/dist
+          retention-days: 14
+      - uses: actions/upload-pages-artifact@v3
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_pages }}
+        with:
+          path: Jev/decision-studio/dist
+  deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_pages }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

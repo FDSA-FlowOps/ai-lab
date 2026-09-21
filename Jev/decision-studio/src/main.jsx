@@ -1,0 +1,58 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { Renderer, JSONUIProvider } from '@json-render/react';
+import { catalog, scenarios } from './catalog.mjs';
+import './style.css';
+
+function Trend({props:p}) {
+  const max=Math.max(...p.values,1);
+  return <article className="widget trend"><div className="widget-label">{p.title}<span>{p.unit}</span></div><div className="bars">{p.values.map((v,i)=><div className="bar-col" key={i}><span className="bar-value">{v}</span><div className="bar" style={{height:`${Math.max(5,v/max*95)}px`}}/><small>{p.labels[i]}</small></div>)}</div></article>;
+}
+function Checklist({props:p}) {
+  const [checked,setChecked]=useState([]);
+  return <article className="widget checklist"><div className="widget-label">{p.title}<span>{checked.length}/{p.items.length}</span></div>{p.items.map((item,i)=><label key={item}><input type="checkbox" checked={checked.includes(i)} onChange={()=>setChecked(xs=>xs.includes(i)?xs.filter(x=>x!==i):[...xs,i])}/><span>{item}</span></label>)}</article>;
+}
+const {registry}=(()=>{
+  // Explicit registry: Jev can choose recipes, never arbitrary browser code.
+  const wrap=Component=>({element,children})=><Component props={element.props}>{children}</Component>;
+  return {registry:{
+    Board:wrap(({props:p,children})=><section className="board"><header><span className="eyebrow">COMPOSED INTERFACE</span><h2>{p.title}</h2><p>{p.subtitle}</p></header><div className="board-grid">{children}</div></section>),
+    Metric:wrap(({props:p})=><article className={`widget metric ${p.tone}`}><div className="widget-label">{p.label}<span>↗</span></div><strong>{p.value}</strong><p>{p.detail}</p></article>),
+    Alert:wrap(({props:p})=><article className={`widget alert ${p.level}`}><span className="alert-icon">{p.level==='warning'?'!':'↗'}</span><div><h3>{p.title}</h3><p>{p.body}</p></div></article>),
+    Queue:wrap(({props:p})=><article className="widget queue"><div className="widget-label">{p.title}<span>{p.rows.length} registros</span></div>{p.rows.map(r=><div className="queue-row" key={r.name}><div><strong>{r.name}</strong><small>{r.detail}</small></div><span className="status">{r.status}</span></div>)}</article>),
+    Reviewers:wrap(({props:p})=><article className="widget reviewers"><div className="widget-label">{p.title}<span>Especialistas</span></div><div className="people">{p.names.map((n,i)=><div key={n}><span className={`avatar a${i}`}>{n.slice(0,2).toUpperCase()}</span><strong>{n}</strong><small>Revisión propuesta</small></div>)}</div></article>),
+    Trend:wrap(Trend), Checklist:wrap(Checklist),
+  }};
+})();
+function Studio(){
+  const [recordings,setRecordings]=useState(null),[loadError,setLoadError]=useState('');
+  const [sceneId,setSceneId]=useState('review'),[versionId,setVersionId]=useState('original');
+  const [view,setView]=useState('preview'),[frame,setFrame]=useState(null),[playing,setPlaying]=useState(false),[showCatalog,setShowCatalog]=useState(false);
+  const timers=useRef([]);
+  const scene=scenarios.find(s=>s.id===sceneId);
+  const run=recordings?.runs.find(r=>r.id===sceneId);
+  const version=run?.versions.find(v=>v.id===versionId);
+  const steps=version?.events.filter(e=>e.type==='step')||[];
+  const spec=frame===null?version?.spec:steps[frame]?.spec;
+  const count=spec?Object.keys(spec.elements).length:0;
+  const clearTimers=()=>{timers.current.forEach(clearTimeout);timers.current=[];};
+  const stop=()=>{clearTimers();setPlaying(false);setFrame(null);};
+  useEffect(()=>{const c=new AbortController();fetch(`${import.meta.env.BASE_URL}runs.json`,{signal:c.signal}).then(r=>{if(!r.ok)throw new Error('Las grabaciones todavía no están disponibles.');return r.json();}).then(data=>{
+    if(data.model!=='typesafe-ai/jev'||data.mode!=='recorded'||!Array.isArray(data.runs))throw new Error('Formato de grabación incorrecto.');
+    for(const r of data.runs)for(const v of r.versions){if(!catalog.validate(v.spec).success)throw new Error('La grabación contiene una interfaz inválida.');}
+    setRecordings(data);
+  }).catch(e=>{if(e.name!=='AbortError')setLoadError(e.message);});return()=>{c.abort();clearTimers();};},[]);
+  const selectScene=id=>{stop();setSceneId(id);setVersionId('original');};
+  const selectVersion=id=>{stop();setVersionId(id);};
+  const replay=()=>{clearTimers();if(!steps.length)return;setView('preview');setPlaying(true);setFrame(0);for(let i=1;i<steps.length;i++)timers.current.push(setTimeout(()=>setFrame(i),i*1100));timers.current.push(setTimeout(()=>{setPlaying(false);setFrame(null);},steps.length*1100));};
+  const download=()=>{if(!spec)return;const url=URL.createObjectURL(new Blob([JSON.stringify(spec,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=`jev-${sceneId}-${versionId}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+  return <div className="app"><nav className="nav"><a className="brand" href="./"><span className="brand-icon">∴</span>FDSA<span className="brand-light">/ LAB</span></a><span className="nav-center">EXPERIMENT 006 <span>—</span> GENERATIVE INTERFACES</span><a className="repo" href="https://github.com/FDSA-FlowOps/ai-lab/tree/main/Jev/decision-studio" target="_blank" rel="noreferrer">Ver código ↗</a></nav>
+    <main><header className="hero"><div><div className="hero-kicker"><span className="dot"/> JEV × JSON-RENDER <span className="pill">EXPERIMENTAL</span></div><h1>Decisiones.<br/><span>No tokens.</span></h1><p>Un modelo elige las piezas.<br/>Una interfaz toma forma.</p></div><div className="hero-diagram" aria-label="Catálogo de componentes, decisiones Jev e interfaz renderizada"><div className="diagram-piece"><span>01 / CATÁLOGO</span><div className="mini-tiles"><i/><i/><i/><i/></div></div><span className="diagram-arrow">→</span><div className="jev-core">jev<span>DECISION ENGINE</span></div><span className="diagram-arrow">→</span><div className="diagram-piece"><span>02 / INTERFAZ</span><div className="mini-layout"><i/><i/><i/></div></div><p>Tú defines lo posible. Jev compone.</p></div></header>
+    <div className="section-title"><span>ELIGE UN ESCENARIO</span><span>03 LABORATORIOS / DATOS SINTÉTICOS</span></div><div className="scenario-grid">{scenarios.map(s=><button key={s.id} className={`scenario ${sceneId===s.id?'selected':''}`} onClick={()=>selectScene(s.id)} aria-pressed={sceneId===s.id}><div><span className="scenario-number">/{s.number}</span><span className="scenario-tag">{s.tag}</span></div><h2>{s.label}<span>↗</span></h2><p>{s.description}</p></button>)}</div>
+    <div className="studio"><aside className="controls"><div className="eyebrow">BRIEF DE COMPOSICIÓN</div><h2>{scene.title}</h2><div className="prompt"><span>REQUEST</span><p>{version?.prompt||scene.prompt}</p></div><div className="eyebrow versions-label">EXPLORA LAS VERSIONES</div><div className="versions"><button className={versionId==='original'?'active':''} onClick={()=>selectVersion('original')}>01 <span>Composición inicial</span></button>{scene.edits.map((e,i)=><button key={e.id} className={versionId===e.id?'active':''} onClick={()=>selectVersion(e.id)}>0{i+2} <span>{e.label}</span></button>)}</div><button className="replay" onClick={playing?stop:replay} disabled={!version}>{playing?'■ Detener reproducción':'↻ Reproducir decisiones'}</button><div className="recording-note"><span className="dot"/> {recordings?'EJECUCIÓN REAL · GRABADA':'CARGANDO GRABACIÓN'}<p>La reproducción está ralentizada para explorar los pasos. No hace una llamada nueva al modelo.</p></div><button className="catalog-toggle" onClick={()=>setShowCatalog(!showCatalog)} aria-expanded={showCatalog}>{showCatalog?'−':'+'} Ver piezas disponibles <span>{scene.candidates.length}</span></button>{showCatalog&&<ul className="catalog-list">{scene.candidates.map(c=><li key={c.id}><code>{c.element.type}</code><span>{c.id}</span></li>)}</ul>}</aside>
+    <section className="workspace"><div className="workspace-toolbar"><div className="tabs" role="tablist" aria-label="Vista de composición">{[['preview','Interfaz'],['trace','Decisiones'],['json','JSON spec']].map(([id,label])=><button key={id} role="tab" aria-selected={view===id} className={view===id?'active':''} onClick={()=>setView(id)}>{label}</button>)}</div><button className="download" onClick={download} disabled={!spec} aria-label="Descargar JSON spec">↓ <span>Exportar</span></button></div><div className="metrics-strip"><div><span>MODELO</span><strong>Jev <small>System One</small></strong></div><div><span>COMPOSICIÓN REAL</span><strong>{version?`${(version.elapsedMs/1000).toFixed(2)} s`:'—'}</strong></div><div><span>EVALUACIONES</span><strong>{version?steps.length:'—'}</strong></div><div><span>ELEMENTOS</span><strong>{count||'—'}</strong></div></div>
+    <div className={`canvas ${view==='preview'?'':'code-view'}`} aria-live="polite">{loadError?<div className="empty"><h3>No se pudo cargar la ejecución</h3><p>{loadError}</p><p>No se muestran resultados simulados como si fueran de Jev.</p></div>:!spec?<div className="empty"><div className="loading-dot"/><p>Cargando composiciones de Jev…</p></div>:view==='preview'?<div className="rendered" key={`${sceneId}-${versionId}-${frame}`}><JSONUIProvider registry={registry} initialState={spec.state||{}}><fieldset disabled={playing} className="render-fieldset"><Renderer spec={spec} registry={registry}/></fieldset></JSONUIProvider></div>:view==='json'?<pre>{JSON.stringify(spec,null,2)}</pre>:<div className="trace"><h3>Del catálogo a la interfaz</h3><p>Decisiones registradas por el compositor. Las selecciones no son explicaciones del razonamiento interno.</p>{steps.map((e,i)=><article key={i}><div className="trace-header"><span className="trace-number">0{i+1}</span><strong>{e.step.choice}</strong><span>{e.step.elapsedMs.toFixed(0)} ms</span></div><p>{e.step.description}</p>{e.step.answers&&<div className="answers">{Object.entries(e.step.answers).map(([key,a])=><div key={key}><code>{key}</code><strong>{a.choice}</strong>{typeof a.confidence==='number'&&<small title="Confianza reportada, no garantía de calidad">{Math.round(a.confidence*100)}%</small>}</div>)}</div>}</article>)}<div className="trace-footer">Estado: {version.stopReason} · Tokens de entrada: {version.inputTokens??'no reportados'}</div></div>}</div><div className="workspace-footer"><span className={playing?'live-text':''}>{playing?`REPRODUCIENDO PASO ${(frame||0)+1} / ${steps.length}`:'CATÁLOGO ACOTADO · SALIDA ESTRUCTURADA'}</span><span>rendered with json-render</span></div></section></div>
+    <section className="explanation"><div><span className="eyebrow">CÓMO FUNCIONA</span><h2>La creatividad está<br/>en las decisiones.</h2></div><article><span>01</span><h3>Nosotros ponemos las piezas</h3><p>Componentes, textos y datos sintéticos preparados. No hay cifras ni contenido inventados por el modelo.</p></article><article><span>02</span><h3>Jev selecciona y ordena</h3><p>El compositor experimental consulta a Jev vía Vercel AI Gateway y construye un spec a partir del catálogo.</p></article><article><span>03</span><h3>React lo hace tangible</h3><p>json-render transforma el spec en componentes reales. Puedes explorar versiones, marcar tareas y descargar el JSON.</p></article></section>
+    </main><footer className="footer"><span>FDSA / AI LAB <span className="muted">· HECHO PARA EXPERIMENTAR</span></span><span>{recordings?`Grabado ${new Date(recordings.generatedAt).toLocaleDateString('es-ES')}`:'Sin grabación cargada'} · <a href="https://json-render.dev/docs/jev" target="_blank" rel="noreferrer">Sobre el experimento ↗</a></span></footer></div>;
+}
+createRoot(document.getElementById('root')).render(<Studio/>);

@@ -1,0 +1,22 @@
+{
+  "name": "fdsa-jev-decision-studio",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "generate": "node scripts/generate.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@json-render/core": "file:vendor/json-render-core-0.21.0.tgz",
+    "@json-render/react": "file:vendor/json-render-react-0.21.0.tgz",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "zod": "4.3.6"
+  },
+  "devDependencies": { "vite": "7.3.1" },
+  "engines": { "node": ">=24" }
+}
